@@ -562,6 +562,7 @@ def main():
     # Handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("enable", enable_protection))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r"^تفعيل$"), enable_protection))
     application.add_handler(CommandHandler("disable", disable_protection))
     application.add_handler(CallbackQueryHandler(captcha_callback_handler, pattern=re.compile(r"^captcha_d+_d+$")))
     
