@@ -1,4 +1,5 @@
-python-telegram-bot
-pymongo
-python-dotenv
+python-telegram-bot==20.7
+pymongo==4.6.0
+python-dotenv==1.0.0
+asyncio
 
