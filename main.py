@@ -654,8 +654,20 @@ def main() -> None:
 
     print("🤖 بدء تشغيل بوت الحماية...")
 
-    # تشغيل البوت بوضع الاستقصاء (polling) للاختبار المحلي
-    application.run_polling()
+    # إعداد الويب هوك
+    WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+    PORT = int(os.getenv("PORT", 5000))
+
+    if not WEBHOOK_URL:
+        raise ValueError("WEBHOOK_URL environment variable not set.")
+
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path="webhook",
+        webhook_url=WEBHOOK_URL
+    )
+
 
 
 

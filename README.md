@@ -91,7 +91,7 @@ PORT=8080
     -   `MONGO_URI`
     -   `WEBHOOK_URL`: يجب أن يكون هذا هو عنوان URL الذي توفره Render لتطبيقك، متبوعًا بـ `/webhook` (على سبيل المثال، `https://your-app-name.onrender.com/webhook`).
     -   `PORT`: Render عادةً ما توفر هذا المتغير تلقائيًا (عادةً 10000). إذا لم يكن موجودًا، قم بتعيينه إلى `10000`.
-6.  تأكد من أن أمر البناء (Build Command) هو `pip install -r requirements.txt`.
+6.  ت6.  تأكد من أن أمر البناء (Build Command) هو `pip install -r requirements.txt`..
 7.  تأكد من أن أمر البدء (Start Command) هو `python3 main.py`.
 8.  انشر الخدمة. بعد النشر، ستحتاج إلى التأكد من أن تيليجرام يعرف `WEBHOOK_URL` الصحيح. يقوم البوت تلقائيًا بتعيين الويب هوك عند التشغيل، لذا يجب أن يعمل بشكل صحيح بمجرد بدء تشغيل الخدمة على Render.
 
