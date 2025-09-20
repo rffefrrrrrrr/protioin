@@ -656,7 +656,7 @@ def main() -> None:
 
     # إعداد الويب هوك
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    PORT = int(os.getenv("PORT", 5000))
+    PORT = int(os.getenv("PORT", 10000)) # Render typically uses port 10000
 
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL environment variable not set.")
