@@ -461,6 +461,7 @@ app = Flask(__name__)
 
 @app.route("/webhook", methods=["POST"])
 async def webhook_handler():
+    print("Webhook handler called!")
     update = Update.de_json(request.get_json(force=True), application.bot)
     await application.process_update(update)
     return "ok"
