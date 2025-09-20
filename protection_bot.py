@@ -85,7 +85,6 @@ def init_database():
         database.captcha_stats.create_index("timestamp")
 
         database.users.create_index("user_id", unique=True)
-
         database.chats.create_index("chat_id", unique=True)
         database.chats.create_index("protection_enabled")
         database.chats.create_index("activating_admin_id")
@@ -448,7 +447,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
     
     user_data = pending_users[chat_id][user_id]
     correct_answer = user_data['correct_answer']
-    
+
     if selected_answer == correct_answer:
         try:
             await context.bot.restrict_chat_member(
@@ -701,8 +700,7 @@ def main() -> None:
         print("⛔ نسخة أخرى من البوت تعمل بالفعل. الخروج...")
         return
 
-    updater = Updater(BOT_TOKEN)
-    application = Application.builder().updater(updater).build()
+    application = Application.builder().token(BOT_TOKEN).build()
 
     # تحميل حالة الحماية من قاعدة البيانات
     database = get_db_client()
@@ -738,18 +736,6 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
-
-
-        database.chats.create_index("chat_id", unique=True)
-        database.chats.create_index("protection_enabled")
-        database.chats.create_index("activating_admin_id")
-        logger.info("MongoDB indexes ensured.")
-    except OperationFailure as e:
-        logger.error(f"Failed to create MongoDB indexes: {e}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during MongoDB index creation: {e}")
 
 def log_captcha_event(user_id: int, chat_id: int, status: str):
     """تسجيل حدث كابتشا في قاعدة البيانات"""
@@ -1104,7 +1090,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
     
     user_data = pending_users[chat_id][user_id]
     correct_answer = user_data['correct_answer']
-    
+
     if selected_answer == correct_answer:
         try:
             await context.bot.restrict_chat_member(
