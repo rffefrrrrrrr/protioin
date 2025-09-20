@@ -558,6 +558,7 @@ def main():
     """الدالة الرئيسية لتشغيل البوت"""
     application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
+
     # Handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("enable", enable_protection))
@@ -572,7 +573,9 @@ def main():
     application.add_error_handler(error_handler)
 
     # Run the bot until the user presses Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, close_loop=False)
+
+
 
 if __name__ == "__main__":
     main()
