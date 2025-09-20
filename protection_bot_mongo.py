@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -9,7 +10,6 @@ import re
 import logging
 import asyncio
 import random
-import sqlite3
 import os
 from dotenv import load_dotenv
 
@@ -22,9 +22,12 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
 
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, OperationFailure
+
 # إعداد التسجيل
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format=\'%(asctime)s - %(name)s - %(levelname)s - %(message)s\',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -54,15 +57,12 @@ pending_users: Dict[int, Dict[int, dict]] = {}
 kick_tasks: Dict[str, asyncio.Task] = {}
 
 # MongoDB Client
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure, OperationFailure
-
 client: MongoClient = None
 db = None
 
 def get_db_client():
     global client, db
-    if client is None or not client.admin.command('ping'): # Check if client is connected
+    if client is None or not client.admin.command(\'ping\'): # Check if client is connected
         try:
             client = MongoClient(DATABASE_URL)
             db = client.protection_bot_db # You can choose your database name
@@ -77,9 +77,12 @@ def get_db_client():
 
 def init_database():
     """تهيئة قاعدة البيانات (MongoDB لا تحتاج لإنشاء جداول صريحة) """
+    # MongoDB is schema-less, collections are created on first insert.
+    # We can ensure indexes here if needed.
     database = get_db_client()
-    if database is not None:
+    if database:
         try:
+            # Ensure indexes for efficient querying
             database.captcha_stats.create_index("user_id")
             database.captcha_stats.create_index("chat_id")
             database.captcha_stats.create_index("timestamp")
@@ -97,7 +100,7 @@ def init_database():
 def log_captcha_event(user_id: int, chat_id: int, status: str):
     """تسجيل حدث كابتشا في قاعدة البيانات"""
     database = get_db_client()
-    if database is not None:
+    if database:
         try:
             database.captcha_stats.insert_one({
                 "user_id": user_id,
@@ -111,7 +114,7 @@ def log_captcha_event(user_id: int, chat_id: int, status: str):
 def update_user_info(user_id: int, username: str = None, first_name: str = None):
     """تحديث معلومات المستخدم في قاعدة البيانات"""
     database = get_db_client()
-    if database is not None:
+    if database:
         try:
             database.users.update_one(
                 {"user_id": user_id},
@@ -128,7 +131,7 @@ def update_user_info(user_id: int, username: str = None, first_name: str = None)
 def update_chat_info(chat_id: int, chat_title: str = None, protection_enabled: bool = None, admin_id: int = None):
     """تحديث معلومات المجموعة في قاعدة البيانات"""
     database = get_db_client()
-    if database is not None:
+    if database:
         update_fields = {"last_activity": datetime.now()}
         if chat_title is not None:
             update_fields["chat_title"] = chat_title
@@ -150,7 +153,7 @@ def get_stats(user_id: int = None, chat_id: int = None, hours: int = None):
     """الحصول على الإحصائيات"""
     database = get_db_client()
     stats = {"success": 0, "kicked": 0, "timeout": 0}
-    if database is not None:
+    if database:
         query = {}
         if chat_id:
             query["chat_id"] = chat_id
@@ -176,7 +179,7 @@ def get_bot_stats():
     database = get_db_client()
     total_chats = 0
     total_users = 0
-    if database is not None:
+    if database:
         try:
             total_chats = database.chats.distinct("chat_id")
             total_users = database.users.distinct("user_id")
@@ -188,7 +191,7 @@ def get_all_users():
     """الحصول على جميع المستخدمين"""
     database = get_db_client()
     users = []
-    if database is not None:
+    if database:
         try:
             users = [user["user_id"] for user in database.users.find({}, {"user_id": 1})]
         except Exception as e:
@@ -199,17 +202,17 @@ def get_all_chats():
     """الحصول على جميع المجموعات التي تم تفعيل الحماية فيها"""
     database = get_db_client()
     chats = []
-    if database is not None:
+    if database:
         try:
             chats = [chat["chat_id"] for chat in database.chats.find({"protection_enabled": True}, {"chat_id": 1})]
         except Exception as e:
             logger.error(f"Error getting all chats from MongoDB: {e}")
     return chats
 
-async def is_activating_admin(user_id: int) -> bool:
+def is_activating_admin(user_id: int) -> bool:
     """التحقق مما إذا كان المستخدم هو المشرف الذي قام بتفعيل البوت في أي مجموعة"""
     database = get_db_client()
-    if database is not None:
+    if database:
         try:
             result = database.chats.find_one({"protection_enabled": True, "activating_admin_id": user_id})
             return result is not None
@@ -226,12 +229,12 @@ class CaptchaGenerator:
         """توليد سؤال رياضي بسيط"""
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
-        operation = random.choice(['+', '-', '*'])
+        operation = random.choice([\"+\", \"-\", \"*\"])
         
-        if operation == '+':
+        if operation == \"+\":
             answer = num1 + num2
             question = f"كم يساوي {num1} + {num2}؟"
-        elif operation == '-':
+        elif operation == \"-\":
             if num1 < num2:
                 num1, num2 = num2, num1
             answer = num1 - num2
@@ -266,16 +269,17 @@ class CaptchaGenerator:
         return options
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"start_command: Received /start command from user {update.effective_user.id}")
     """معالج أمر /start"""
     user = update.effective_user
     
     update_user_info(user.id, user.username, user.first_name)
     
-    if update.effective_chat.type == 'private':
+    if update.effective_chat.type == \"private\":
         message_text = (
             "مرحباً! أنا بوت حماية المجموعات.\n"
             "أضفني إلى مجموعتك واجعلني مشرفاً لأتمكن من حمايتها.\n"
-            "استخدم الأمر 'تفعيل' في المجموعة لتفعيل نظام الحماية.\n"
+            "استخدم الأمر \"تفعيل\" في المجموعة لتفعيل نظام الحماية.\n"
         )
         
         main_keyboard = []
@@ -283,7 +287,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id in DEVELOPER_IDS:
             main_keyboard.append([InlineKeyboardButton("⚙️ أوامر المطورين", callback_data="dev_commands_menu")])
 
-        if await is_activating_admin(user.id):
+        if is_activating_admin(user.id):
             main_keyboard.append([InlineKeyboardButton("🛠️ أوامر المشرفين", callback_data="admin_commands_menu")])
 
         if not main_keyboard:
@@ -300,7 +304,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "مرحباً! أنا بوت الحماية.\n"
-            "استخدم الأمر 'تفعيل' لتفعيل نظام الحماية في هذه المجموعة."
+            "استخدم الأمر \"تفعيل\" لتفعيل نظام الحماية في هذه المجموعة."
         )
 
 async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -310,7 +314,7 @@ async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ['administrator', 'creator'] and user_id not in DEVELOPER_IDS:
+        if member.status not in [\"administrator\", \"creator\"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -332,7 +336,7 @@ async def disable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ['administrator', 'creator'] and user_id not in DEVELOPER_IDS:
+        if member.status not in [\"administrator\", \"creator\"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط إلغاء تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -391,30 +395,32 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pending_users[chat_id] = {}
         
         pending_users[chat_id][user_id] = {
-            'correct_answer': correct_answer,
-            'join_time': datetime.now(),
-            'username': new_user.username or new_user.first_name,
-            'wrong_attempts': 0
+            \"correct_answer\": correct_answer,
+            \"join_time\": datetime.now(),
+            \"username\": new_user.username or new_user.first_name,
+            \"wrong_attempts\": 0
         }
         
         try:
             await context.bot.restrict_chat_member(
                 chat_id=chat_id,
                 user_id=user_id,
-                permissions=telegram.ChatPermissions(can_send_messages=False)
+                permissions=telegram.ChatPermissions(
+                    can_send_messages=False
+                )
             )
             
             captcha_message = await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"مرحباً {new_user.mention_html()}!\n\n"
-                     f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n"
-                     f"❓ {question}\n\n"
+                text=f"مرحباً {new_user.mention_html()}!\n\n" \
+                     f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n" \
+                     f"❓ {question}\n\n" \
                      f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.",
                 reply_markup=reply_markup,
-                parse_mode='HTML'
+                parse_mode=\'HTML\'
             )
             
-            pending_users[chat_id][user_id]['message_id'] = captcha_message.message_id
+            pending_users[chat_id][user_id][\"message_id\"] = captcha_message.message_id
             
             task_key = f"{chat_id}_{user_id}"
             kick_task = asyncio.create_task(
@@ -452,7 +458,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
         return
     
     user_data = pending_users[chat_id][user_id]
-    correct_answer = user_data['correct_answer']
+    correct_answer = user_data[\"correct_answer\"]
     
     if selected_answer == correct_answer:
         try:
@@ -474,30 +480,24 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
             if task_key in kick_tasks:
                 kick_tasks[task_key].cancel()
                 del kick_tasks[task_key]
-            await context.bot.send_message(chat_id, f"✅ أحسنت! {query.from_user.mention_html()} لقد أجبت بشكل صحيح. تم فك التقييد عنك.", parse_mode='HTML')
+            await context.bot.send_message(chat_id, f"✅ أحسنت! {query.from_user.mention_html()} لقد أجبت بشكل صحيح. تم فك التقييد عنك.", parse_mode=\'HTML\')
             await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
             
             del pending_users[chat_id][user_id]
             
-            log_captcha_event(user_id, chat_id, 'success')
+            log_captcha_event(user_id, chat_id, \"success\")
         except Exception as e:
             logger.error(f"خطأ في إلغاء تقييد العضو: {e}")
     else:
-        user_data['wrong_attempts'] += 1
+        user_data[\"wrong_attempts\"] += 1
         
-        if user_data['wrong_attempts'] >= 3:
-            await query.edit_message_text("❌ لقد تجاوزت الحد الأقصى لعدد المحاولات. سيتم طردك.")
-            await context.bot.kick_chat_member(chat_id, user_id)
-            log_captcha_event(user_id, chat_id, 'kicked')
-            
-            task_key = f"{chat_id}_{user_id}"
-            if task_key in kick_tasks:
-                kick_tasks[task_key].cancel()
-                del kick_tasks[task_key]
-            
-            if chat_id in pending_users and user_id in pending_users[chat_id]:
-                del pending_users[chat_id][user_id]
+        if user_data[\"wrong_attempts\"] >= 3:
+            await query.edit_message_text("❌ لقد تجاوزت الحد الأقصى للمحاولات. سيتم طردك.")
+            await schedule_kick(context, chat_id, user_id, query.message.message_id, immediate=True)
+            log_captcha_event(user_id, chat_id, \"kicked\")
         else:
+            await query.answer("❌ إجابة خاطئة. حاول مرة أخرى.", show_alert=True)
+            # Regenerate options and update message
             question, correct_answer = CaptchaGenerator.generate_math_captcha()
             options = CaptchaGenerator.generate_options(correct_answer)
             keyboard = []
@@ -505,114 +505,118 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 keyboard.append([InlineKeyboardButton(str(option), callback_data=f"captcha_{user_id}_{option}")])
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            pending_users[chat_id][user_id]['correct_answer'] = correct_answer
+            pending_users[chat_id][user_id][\"correct_answer\"] = correct_answer
             
             await query.edit_message_text(
-                f"❌ إجابة خاطئة. حاول مرة أخرى.\n\n❓ {question}",
-                reply_markup=reply_markup
+                text=f"مرحباً {query.from_user.mention_html()}!\n\n" \
+                     f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n" \
+                     f"❓ {question}\n\n" \
+                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.\n" \
+                     f"(محاولات خاطئة: {user_data[\"wrong_attempts\"]}/3)",
+                reply_markup=reply_markup,
+                parse_mode=\'HTML\'
             )
 
-async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int):
-    """جدولة طرد المستخدم إذا لم يحل الكابتشا في الوقت المحدد"""
-    await asyncio.sleep(1800)  # 30 minutes
+async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int, immediate: bool = False):
+    """جدولة طرد المستخدم إذا لم يحل الكابتشا"""
+    delay = 0 if immediate else 30 * 60 # 30 minutes
     
-    task_key = f"{chat_id}_{user_id}"
-    if task_key in kick_tasks:
-        del kick_tasks[task_key]
-
-    if chat_id in pending_users and user_id in pending_users[chat_id]:
-        try:
-            await context.bot.kick_chat_member(chat_id, user_id)
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد {pending_users[chat_id][user_id]['username']} لعدم حل الكابتشا.")
+    try:
+        await asyncio.sleep(delay)
+        
+        if chat_id in pending_users and user_id in pending_users[chat_id]:
+            await context.bot.ban_chat_member(chat_id, user_id)
+            await context.bot.send_message(chat_id, f"❌ تم طرد المستخدم {pending_users[chat_id][user_id][\"username\"]} لعدم حل الكابتشا في الوقت المحدد.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            log_captcha_event(user_id, chat_id, 'timeout')
+            log_captcha_event(user_id, chat_id, \"timeout\" if not immediate else \"kicked\")
             del pending_users[chat_id][user_id]
-        except Exception as e:
-            logger.error(f"خطأ في طرد العضو بعد انتهاء الوقت: {e}")
+        
+        task_key = f"{chat_id}_{user_id}"
+        if task_key in kick_tasks:
+            del kick_tasks[task_key]
+            
+    except asyncio.CancelledError:
+        logger.info(f"تم إلغاء مهمة الطرد للمستخدم {user_id} في المجموعة {chat_id}.")
+    except Exception as e:
+        logger.error(f"خطأ في مهمة الطرد المجدولة: {e}")
 
 async def dev_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """قائمة أوامر المطورين"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
 
     if user_id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الأوامر مخصصة للمطورين فقط.")
+        await query.edit_message_text("عذراً، هذا الأمر مخصص للمطورين فقط.")
         return
 
-    message_text = "⚙️ قائمة أوامر المطورين:\n\n"
-    message_text += "/bot_stats - إحصائيات البوت العامة\n"
-    message_text += "/all_users - قائمة بجميع المستخدمين\n"
-    message_text += "/all_chats - قائمة بجميع المجموعات المفعلة\n"
-
-    keyboard = [[InlineKeyboardButton("📊 إحصائيات البوت", callback_data="dev_bot_stats")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]]
+    keyboard = [
+        [InlineKeyboardButton("📊 إحصائيات البوت", callback_data="dev_bot_stats")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(message_text, reply_markup=reply_markup)
+    await query.edit_message_text("⚙️ قائمة أوامر المطورين:", reply_markup=reply_markup)
+
+async def admin_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    chat_id = query.message.chat_id
+
+    if not (user_id in DEVELOPER_IDS or await is_activating_admin(user_id)):
+        await query.edit_message_text("عذراً، هذا الأمر مخصص للمشرفين أو المطورين فقط.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("📊 إحصائيات المجموعة", callback_data=f"admin_chat_stats_{chat_id}")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text("🛠️ قائمة أوامر المشرفين:", reply_markup=reply_markup)
 
 async def dev_bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إحصائيات البوت للمطورين"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
 
     if user_id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الأوامر مخصصة للمطورين فقط.")
+        await query.edit_message_text("عذراً، هذا الأمر مخصص للمطورين فقط.")
         return
-    
-    stats = get_bot_stats()
-    message_text = f"📊 إحصائيات البوت:\n\n"
-    message_text += f"عدد المجموعات: {stats['total_chats']}\n"
-    message_text += f"عدد المستخدمين: {stats['total_users']}\n"
 
+    stats = get_bot_stats()
+    message_text = (
+        f"📊 إحصائيات البوت العامة:\n"
+        f"  عدد المجموعات: {stats[\"total_chats\"]}\n"
+        f"  عدد المستخدمين: {stats[\"total_users\"]}\n"
+    )
     keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="dev_commands_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(message_text, reply_markup=reply_markup)
 
-async def admin_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """قائمة أوامر المشرفين"""
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-
-    if not await is_activating_admin(user_id):
-        await query.edit_message_text("عذراً، هذه الأوامر مخصصة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
-        return
-
-    message_text = "🛠️ قائمة أوامر المشرفين:\n\n"
-    message_text += "/chat_stats - إحصائيات الكابتشا لهذه المجموعة\n"
-
-    keyboard = [[InlineKeyboardButton("📊 إحصائيات المجموعة", callback_data=f"admin_chat_stats_{query.message.chat.id}")],
-                [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(message_text, reply_markup=reply_markup)
-
 async def admin_chat_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إحصائيات الكابتشا للمجموعة"""
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     chat_id = int(query.data.split("_")[3])
 
-    if not await is_activating_admin(user_id):
-        await query.edit_message_text("عذراً، هذه الأوامر مخصصة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
+    if not (user_id in DEVELOPER_IDS or await is_activating_admin(user_id)):
+        await query.edit_message_text("عذراً، هذا الأمر مخصص للمشرفين أو المطورين فقط.")
         return
-    
-    stats = get_stats(chat_id=chat_id)
-    message_text = f"📊 إحصائيات الكابتشا للمجموعة:\n\n"
-    message_text += f"إجابات صحيحة: {stats['success']}\n"
-    message_text += f"تم طردهم: {stats['kicked']}\n"
-    message_text += f"انتهى الوقت: {stats['timeout']}\n"
 
+    stats = get_stats(chat_id=chat_id)
+    message_text = (
+        f"📊 إحصائيات الكابتشا للمجموعة:\n"
+        f"  تم الحل بنجاح: {stats[\"success\"]}\n"
+        f"  تم الطرد (فشل): {stats[\"kicked\"]}\n"
+        f"  تم الطرد (انتهى الوقت): {stats[\"timeout\"]}\n"
+    )
     keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_commands_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(message_text, reply_markup=reply_markup)
 
-def start_bot():
+async def main():
     """دالة التشغيل الرئيسية للبوت"""
     init_database() # Initialize MongoDB
     application = Application.builder().token(BOT_TOKEN).build()
-
 
     # Handlers
     application.add_handler(CommandHandler("start", start_command))
@@ -628,6 +632,10 @@ def start_bot():
 
     # Run the bot until the user presses Ctrl-C
     logger.info("Bot started polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
 
 

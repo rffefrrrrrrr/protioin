@@ -25,7 +25,7 @@ function startBot() {
     console.log('Starting Telegram protection bot...');
     
     // Start the Python bot process
-    botProcess = spawn('python3', ['protection_bot.py'], {
+    botProcess = spawn('python3', ['-c', 'from protection_bot import start_bot; start_bot()'], {
         cwd: __dirname,
         stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -68,7 +68,15 @@ function startBot() {
 function stopBot() {
     if (botProcess) {
         console.log('Stopping bot...');
-        botProcess.kill('SIGTERM');
+        botProcess.kill("SIGTERM"); // Send SIGTERM for graceful shutdown
+        // Force kill after a timeout if it doesn\'t exit gracefully
+        const killTimeout = setTimeout(() => {
+            if (botProcess && !botProcess.killed) {
+                console.log("Bot did not terminate gracefully, sending SIGKILL...");
+                botProcess.kill("SIGKILL");
+            }
+        }, 5000); // Wait 5 seconds for graceful shutdown
+        botProcess.on('close', () => clearTimeout(killTimeout));
         botProcess = null;
         botStatus = 'stopped';
     }
