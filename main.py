@@ -13,6 +13,7 @@ import random
 import pymongo
 
 import fcntl
+from flask import Flask, request
 from datetime import datetime, timedelta
 from typing import Dict, Set
 import telegram
@@ -661,12 +662,23 @@ def main() -> None:
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL environment variable not set.")
 
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path="webhook",
-        webhook_url=WEBHOOK_URL
-    )
+    # إعداد تطبيق Flask لاستقبال الويب هوك
+    app = Flask(__name__)
+
+    @app.route("/webhook", methods=["POST"])
+    async def webhook_handler():
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+        return "ok"
+
+    # تعيين الويب هوك لتيليجرام
+    async def set_telegram_webhook():
+        await application.bot.set_webhook(url=WEBHOOK_URL)
+
+    # تشغيل الويب هوك وتطبيق Flask
+    asyncio.get_event_loop().run_until_complete(set_telegram_webhook())
+    app.run(host="0.0.0.0", port=PORT)
+
 
 
 
