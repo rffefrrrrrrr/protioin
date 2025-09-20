@@ -28,9 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # توكن البوت
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not set.")
+
 
 # معرفات المطورين (User IDs)
 DEVELOPER_IDS = [6714288409, 6459577996]
@@ -44,16 +42,7 @@ pending_users: Dict[int, Dict[int, dict]] = {}
 # قاموس لتخزين مهام الطرد المؤجلة
 kick_tasks: Dict[str, asyncio.Task] = {}
 
-# قاعدة البيانات
-MONGO_URI = "mongodb+srv://Lara:Lara123.@cluster0.atthgpa.mongodb.net/?retryWrites=true&w=majority"
-MONGO_DB_NAME = "protection_bot_db"
 
-client = pymongo.MongoClient(MONGO_URI)
-db = client[MONGO_DB_NAME]
-
-captcha_stats_collection = db["captcha_stats"]
-users_collection = db["users"]
-chats_collection = db["chats"]
 
 def init_database():
     """تهيئة قاعدة البيانات"""
@@ -434,220 +423,84 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
             logger.info(f"محاولة طرد المستخدم {user_id} من {chat_id} بعد {user_data['wrong_attempts']} محاولات خاطئة.")
             await context.bot.send_message(chat_id, f"❌ إجابات خاطئة متكررة. سيتم طردك. @{query.from_user.username or query.from_user.first_name}")
             try:
-                await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user who is currently restricted
-                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+                await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user
                 log_captcha_event(user_id, chat_id, 'kicked')
             except Exception as e:
-                logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد الإجابات الخاطئة المتكررة: {e}")
-            
-            task_key = f"{chat_id}_{user_id}"
-            if task_key in kick_tasks:
-                kick_tasks[task_key].cancel()
-                del kick_tasks[task_key]
-            
+                logger.error(f"خطأ في طرد المستخدم: {e}")
+            finally:
+                if chat_id in pending_users and user_id in pending_users[chat_id]:
+                    del pending_users[chat_id][user_id]
+
+async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int):
+    """جدولة طرد المستخدم بعد فترة زمنية"""
+    await asyncio.sleep(1800)  # 30 minutes
+    
+    if chat_id in pending_users and user_id in pending_users[chat_id]:
+        logger.info(f"طرد المستخدم {user_id} من {chat_id} بسبب انتهاء الوقت.")
+        try:
+            await context.bot.unban_chat_member(chat_id, user_id)
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد @{pending_users[chat_id][user_id]['username']}.")
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            log_captcha_event(user_id, chat_id, 'timeout')
+        except Exception as e:
+            logger.error(f"خطأ في طرد المستخدم بعد انتهاء الوقت: {e}")
+        finally:
             if chat_id in pending_users and user_id in pending_users[chat_id]:
                 del pending_users[chat_id][user_id]
 
-async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int):
-    """جدولة طرد المستخدم بعد فترة معينة"""
-    await asyncio.sleep(1800)  # 30 دقيقة
-    
-    task_key = f"{chat_id}_{user_id}"
-    if task_key in kick_tasks:
-        del kick_tasks[task_key]
-
-    if chat_id in pending_users and user_id in pending_users[chat_id]:
-        try:
-            await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user who is currently restricted
-            user_data = pending_users[chat_id][user_id]
-            username = user_data['username']
-            await context.bot.send_message(chat_id, f"⏰ انتهت مهلة الكابتشا. تم طرد المستخدم @{username} لعدم حل الكابتشا.")
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            log_captcha_event(user_id, chat_id, 'timeout')
-            del pending_users[chat_id][user_id]
-        except Exception as e:
-            logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد انتهاء المهلة: {e}")
-
-async def dev_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """قائمة أوامر المطورين"""
-    user = update.effective_user
-    query = update.callback_query
-    await query.answer()
-
-    if user.id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الأوامر متاحة للمطورين فقط.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton("📊 إحصائيات البوت", callback_data="bot_stats_show")],
-        [InlineKeyboardButton("📢 إذاعة للمستخدمين", callback_data="broadcast_users_prompt")],
-        [InlineKeyboardButton("📢 إذاعة للمجموعات", callback_data="broadcast_chats_all_prompt")],
-        [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("⚙️ أوامر المطورين:", reply_markup=reply_markup)
-
-async def admin_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """قائمة أوامر المشرفين"""
-    user = update.effective_user
-    query = update.callback_query
-    await query.answer()
-
-    if not is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الأوامر متاحة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
-        return
-
-    keyboard = [
-        [InlineKeyboardButton("📊 إحصائيات مجموعتي", callback_data="admin_stats_show")],
-        [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("🛠️ أوامر المشرفين:", reply_markup=reply_markup)
-
-async def show_bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض إحصائيات البوت العامة"""
-    user = update.effective_user
-    query = update.callback_query
-    await query.answer()
-
-    if user.id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الإحصائيات متاحة للمطورين فقط.")
-        return
-
-    stats = get_bot_stats()
-    text = f"📊 إحصائيات البوت العامة:\n\n"
-    text += f"👥 إجمالي المستخدمين: {stats['total_users']}\n"
-    text += f"🏘️ إجمالي المجموعات: {stats['total_chats']}\n"
-
-    keyboard = [
-        [InlineKeyboardButton("🔙 رجوع", callback_data="dev_commands_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup)
-
-async def show_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض إحصائيات المجموعة للمشرف"""
-    user = update.effective_user
-    query = update.callback_query
-    await query.answer()
-
-    chat_id = update.effective_chat.id
-
-    if not is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذه الإحصائيات متاحة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
-        return
-
-    stats = get_stats(chat_id=chat_id)
-    success_count = stats.get('success', 0)
-    kicked_count = stats.get('kicked', 0)
-    timeout_count = stats.get('timeout', 0)
-
-    text = f"📊 إحصائيات الكابتشا لمجموعتك:\n\n"
-    text += f"✅ نجاح التحقق: {success_count}\n"
-    text += f"❌ طرد (إجابة خاطئة): {kicked_count}\n"
-    text += f"⏰ طرد (انتهاء المهلة): {timeout_count}\n"
-
-    keyboard = [
-        [InlineKeyboardButton("🔙 رجوع", callback_data="admin_commands_menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text, reply_markup=reply_markup)
-
-async def broadcast_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, broadcast_type: str):
-    """طلب رسالة الإذاعة من المطور"""
-    user_id = update.effective_user.id
-    query = update.callback_query
-    await query.answer()
-
-    if user_id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذا الأمر متاح للمطورين فقط.")
-        return
-
-    context.user_data['broadcast_type'] = broadcast_type
-    await query.edit_message_text("الرجاء إرسال الرسالة التي تريد إذاعتها الآن.")
-
-async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج رسائل الإذاعة"""
-    user_id = update.effective_user.id
-    if user_id not in DEVELOPER_IDS:
-        return
-
-    if 'broadcast_type' not in context.user_data:
-        logger.warning("handle_broadcast_message: broadcast_type not found in user_data")
-        return
-
-    broadcast_type = context.user_data.pop('broadcast_type')
-    message_to_broadcast = update.message.text
-
-    sent_count = 0
-    if broadcast_type == 'users':
-        targets = get_all_users()
-        for target_id in targets:
-            try:
-                await context.bot.send_message(chat_id=target_id, text=message_to_broadcast)
-                sent_count += 1
-                await asyncio.sleep(0.1)  # لتجنب تجاوز حدود API
-            except Exception as e:
-                logger.warning(f"فشل إرسال رسالة إذاعية للمستخدم {target_id}: {e}")
-        await update.message.reply_text(f"تم إرسال الرسالة الإذاعية إلى {sent_count} مستخدم.")
-
-    elif broadcast_type == 'chats_all':
-        targets = get_all_chats()
-        logger.info(f"handle_broadcast_message: Found {len(targets)} targets for broadcast type '{broadcast_type}'")
-        for target_id in targets:
-            try:
-                await context.bot.send_message(chat_id=target_id, text=message_to_broadcast)
-                sent_count += 1
-                await asyncio.sleep(0.1)  # لتجنب تجاوز حدود API
-            except Exception as e:
-                logger.warning(f"فشل إرسال رسالة إذاعية للمجموعة {target_id}: {e}")
-        await update.message.reply_text(f"تم إرسال الرسالة الإذاعية إلى {sent_count} مجموعة.")
-
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
-    if not update.message or not update.message.text:
-        return
-    
-    text = update.message.text.strip()
-    chat_id = update.effective_chat.id
-    
-    logger.info(f"handle_text_message: Received text '{text}' in chat_id {chat_id}, chat_type {update.effective_chat.type}")
-
-    # التحقق من أمر التفعيل
+    text = update.message.text
     if text == "تفعيل":
         await enable_protection(update, context)
-    elif text == "إلغاء":
+    elif text == "تعطيل":
         await disable_protection(update, context)
-    elif 'broadcast_type' in context.user_data and update.effective_user.id in DEVELOPER_IDS:
-        await handle_broadcast_message(update, context)
-def main() -> None:
-    """تشغيل البوت"""
+
+# إعداد تطبيق Flask
+app = Flask(__name__)
+
+@app.route("/webhook", methods=["POST"])
+async def webhook_handler():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "ok"
+
+@app.route("/")
+def index():
+    return "Bot is running!"
+
+@app.route("/health")
+def health_check():
+    return "OK", 200
+
+async def main():
+    """الدالة الرئيسية لتشغيل البوت"""
+    global BOT_TOKEN, MONGO_URI, MONGO_DB_NAME, client, db, captcha_stats_collection, users_collection, chats_collection
+
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN environment variable not set.")
+
+    MONGO_URI = os.getenv("MONGO_URI")
+    if not MONGO_URI:
+        raise ValueError("MONGO_URI environment variable not set.")
+    MONGO_DB_NAME = "protection_bot_db"
+
+    client = pymongo.MongoClient(MONGO_URI)
+    db = client[MONGO_DB_NAME]
+
+    captcha_stats_collection = db["captcha_stats"]
+    users_collection = db["users"]
+    chats_collection = db["chats"]
+
     init_database()
 
-
-
+    # إعداد تطبيق تيليجرام
+    global application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # تحميل حالة الحماية من قاعدة البيانات MongoDB
-    for chat in chats_collection.find({}, {"chat_id": 1, "protection_enabled": 1}):
-        protection_enabled[chat["chat_id"]] = chat.get("protection_enabled", False)
-
-    
-    # Handlers for main menu buttons
-    application.add_handler(CallbackQueryHandler(dev_commands_menu, pattern="^dev_commands_menu$"))
-    application.add_handler(CallbackQueryHandler(admin_commands_menu, pattern="^admin_commands_menu$"))
+    # إضافة المعالجات
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CallbackQueryHandler(start_command, pattern="^start_menu$"))
-
-    # Handlers for developer sub-menu
-    application.add_handler(CallbackQueryHandler(show_bot_stats, pattern="^bot_stats_show$"))
-    application.add_handler(CallbackQueryHandler(lambda u, c: broadcast_prompt(u, c, 'users'), pattern="^broadcast_users_prompt$"))
-    application.add_handler(CallbackQueryHandler(lambda u, c: broadcast_prompt(u, c, 'chats_all'), pattern="^broadcast_chats_all_prompt$"))
-
-    # Handlers for admin sub-menu
-    application.add_handler(CallbackQueryHandler(show_admin_stats, pattern="^admin_stats_show$"))
-
-    application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, new_member_handler))
     application.add_handler(ChatMemberHandler(new_member_handler, ChatMemberHandler.CHAT_MEMBER))
     
     application.add_handler(CallbackQueryHandler(captcha_callback_handler, pattern="^captcha_"))
@@ -657,34 +510,16 @@ def main() -> None:
 
     # إعداد الويب هوك
     WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-    PORT = int(os.getenv("PORT", 10000)) # Render typically uses port 10000
-
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL environment variable not set.")
-
-    # إعداد تطبيق Flask لاستقبال الويب هوك
-    app = Flask(__name__)
-
-    @app.route("/webhook", methods=["POST"])
-    async def webhook_handler():
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
-        return "ok"
 
     # تعيين الويب هوك لتيليجرام
     async def set_telegram_webhook():
         await application.bot.set_webhook(url=WEBHOOK_URL)
 
-    # تشغيل الويب هوك وتطبيق Flask
-    asyncio.get_event_loop().run_until_complete(set_telegram_webhook())
-    app.run(host="0.0.0.0", port=PORT)
-
-
-
-
+    # تشغيل الويب هوك
+    await set_telegram_webhook()
 
 if __name__ == '__main__':
-    # تشغيل init_database في بداية التطبيق
-    main()
-
+    asyncio.run(main())
 
