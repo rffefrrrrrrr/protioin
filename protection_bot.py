@@ -153,7 +153,7 @@ def get_stats(user_id: int = None, chat_id: int = None, hours: int = None):
     if hours:
         query["timestamp"] = {"$gte": datetime.now() - timedelta(hours=hours)}
 
-    stats = {\'success\': 0, \'kicked\': 0, \'timeout\': 0}
+    stats = {\"success\": 0, \"kicked\": 0, \"timeout\": 0}
     try:
         pipeline = [
             {"$match": query},
@@ -216,12 +216,12 @@ class CaptchaGenerator:
 ‎        """توليد سؤال رياضي بسيط"""
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
-        operation = random.choice([\'+\', \'-\', \'*\'])
+        operation = random.choice([\"+\", \"-\", \"*\"])
         
-        if operation == \'+\':
+        if operation == \"+\":
             answer = num1 + num2
             question = f"كم يساوي {num1} + {num2}؟"
-        elif operation == \'-\':
+        elif operation == \"-\":
             if num1 < num2:
                 num1, num2 = num2, num1
             answer = num1 - num2
@@ -262,11 +262,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     update_user_info(user.id, user.username, user.first_name)
     
-    if update.effective_chat.type == \'private\':
+    if update.effective_chat.type == \"private\":
         message_text = (
 ‎            "مرحباً! أنا بوت حماية المجموعات.\n"
 ‎            "أضفني إلى مجموعتك واجعلني مشرفاً لأتمكن من حمايتها.\n"
-‎            "استخدم الأمر \'تفعيل\' في المجموعة لتفعيل نظام الحماية.\n"
+‎            "استخدم الأمر \"تفعيل\" في المجموعة لتفعيل نظام الحماية.\n"
         )
         
         main_keyboard = []
@@ -286,14 +286,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif update.callback_query:
             await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
         else:
-            # Fallback if neither message nor callback_query is present, which shouldn\'t happen for /start
+            # Fallback if neither message nor callback_query is present, which shouldn\"t happen for /start
             await context.bot.send_message(chat_id=update.effective_chat.id, text=message_text, reply_markup=reply_markup)
             logger.warning("start_command: Neither update.message nor update.callback_query was present, used fallback send_message.")
 
     else:
         await update.message.reply_text(
 ‎            "مرحباً! أنا بوت الحماية.\n"
-‎            "استخدم الأمر \'تفعيل\' لتفعيل نظام الحماية في هذه المجموعة."
+‎            "استخدم الأمر \"تفعيل\" لتفعيل نظام الحماية في هذه المجموعة."
         )
 
 async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -303,7 +303,7 @@ async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in [\'administrator\', \'creator\'] and user_id not in DEVELOPER_IDS:
+        if member.status not in [\"administrator\", \"creator\"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -325,7 +325,7 @@ async def disable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in [\'administrator\', \'creator\'] and user_id not in DEVELOPER_IDS:
+        if member.status not in [\"administrator\", \"creator\"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط إلغاء تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -384,10 +384,10 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pending_users[chat_id] = {}
         
         pending_users[chat_id][user_id] = {
-            \'correct_answer\': correct_answer,
-            \'join_time\': datetime.now(),
-            \'username\': new_user.username or new_user.first_name,
-            \'wrong_attempts\': 0
+            \"correct_answer\": correct_answer,
+            \"join_time\": datetime.now(),
+            \"username\": new_user.username or new_user.first_name,
+            \"wrong_attempts\": 0
         }
         
         try:
@@ -407,7 +407,7 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode=\'HTML\'
             )
             
-            pending_users[chat_id][user_id][\'message_id\'] = captcha_message.message_id
+            pending_users[chat_id][user_id][\"message_id\"] = captcha_message.message_id
             
             task_key = f"{chat_id}_{user_id}"
             kick_task = asyncio.create_task(
@@ -445,7 +445,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
         return
     
     user_data = pending_users[chat_id][user_id]
-    correct_answer = user_data[\'correct_answer\']
+    correct_answer = user_data[\"correct_answer\"]
     
     if selected_answer == correct_answer:
         # User solved the captcha correctly
@@ -459,7 +459,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 f"✅ أحسنت {query.from_user.mention_html()}! تم التحقق منك بنجاح. يمكنك الآن التحدث في المجموعة.",
                 parse_mode=\'HTML\'
             )
-            log_captcha_event(user_id, chat_id, \'success\')
+            log_captcha_event(user_id, chat_id, \"success\")
         except Exception as e:
             logger.error(f"خطأ في منح صلاحيات العضو بعد حل الكابتشا: {e}")
             await query.edit_message_text("حدث خطأ أثناء منحك صلاحيات التحدث. يرجى إبلاغ المشرف.")
@@ -473,8 +473,8 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 del pending_users[chat_id][user_id]
     else:
         # User answered incorrectly
-        user_data[\'wrong_attempts\'] += 1
-        if user_data[\'wrong_attempts\'] >= 3:
+        user_data[\"wrong_attempts\"] += 1
+        if user_data[\"wrong_attempts\"] >= 3:
             # Kick user after 3 wrong attempts
             try:
                 await context.bot.ban_chat_member(chat_id, user_id)
@@ -482,7 +482,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                     f"❌ {query.from_user.mention_html()} لقد أجبت بشكل خاطئ عدة مرات. تم طردك من المجموعة.",
                     parse_mode=\'HTML\'
                 )
-                log_captcha_event(user_id, chat_id, \'kicked\')
+                log_captcha_event(user_id, chat_id, \"kicked\")
             except Exception as e:
                 logger.error(f"خطأ في طرد العضو بعد محاولات خاطئة: {e}")
                 await query.edit_message_text("حدث خطأ أثناء طردك. يرجى إبلاغ المشرف.")
@@ -504,7 +504,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
             
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            pending_users[chat_id][user_id][\'correct_answer\'] = correct_answer
+            pending_users[chat_id][user_id][\"correct_answer\"] = correct_answer
             
             await query.edit_message_text(
                 f"❌ إجابة خاطئة. يرجى المحاولة مرة أخرى.\n\n"
@@ -524,9 +524,9 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
             await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=message_id,
-                text=f"❌ انتهى الوقت! تم طرد {pending_users[chat_id][user_id][\'username\']} من المجموعة لعدم حل الكابتشا."
+                text=f"❌ انتهى الوقت! تم طرد {pending_users[chat_id][user_id][\"username\"]} من المجموعة لعدم حل الكابتشا."
             )
-            log_captcha_event(user_id, chat_id, \'timeout\')
+            log_captcha_event(user_id, chat_id, \"timeout\")
         except Exception as e:
             logger.error(f"خطأ في طرد العضو بعد انتهاء الوقت: {e}")
         finally:
@@ -573,7 +573,7 @@ def main():
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == \'__main__\':
+if __name__ == \"__main__\":
     main()
 
 
