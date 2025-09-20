@@ -1,0 +1,31 @@
+{
+  "name": "protection-bot-render",
+  "version": "1.0.0",
+  "description": "Express server to keep Telegram protection bot alive on Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "child_process": "^1.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "protection",
+    "render",
+    "express"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
+
