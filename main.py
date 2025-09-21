@@ -16,6 +16,8 @@ from typing import Dict, Set
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
+from flask import Flask
+import threading
 
 # MongoDB imports
 from pymongo import MongoClient
@@ -671,5 +673,24 @@ def main():
 
 
 if __name__ == '__main__':
+    # Start Flask health check in a separate thread
+    flask_thread = threading.Thread(target=run_flask_app)
+    flask_thread.daemon = True # Allow main program to exit even if thread is still running
+    flask_thread.start()
+
     main()
+
+
+
+# Flask app for health check
+health_app = Flask(__name__)
+
+@health_app.route("/health")
+def health_check():
+    return "OK", 200
+
+def run_flask_app():
+    port = int(os.environ.get("PORT", "10000")) # Render expects 10000 for health checks
+    health_app.run(host="0.0.0.0", port=port)
+
 
