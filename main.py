@@ -69,6 +69,14 @@ def home():
     uptime_minutes = (time.time() - flask_start_time) / 60
     return f"Bot is running! Uptime: {uptime_minutes:.2f} minutes."
 
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def telegram_webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "ok"
+
+
 def run_flask():
     """تشغيل خادم Flask في خيط منفصل"""
     try:
@@ -613,6 +621,12 @@ async def setup_bot():
     if webhook_url:
         await application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
         logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
+
+    # We don't call application.start() or application.run_webhook() here.
+    # The Flask app will handle the incoming webhook requests and pass them to application.process_update().
+    # The main thread will be blocked by app.run() if webhook_url is set, which is the desired behavior for Render.
+    # a webhook setup on platforms like Render.com.
+
     else:
         logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
@@ -628,18 +642,23 @@ if __name__ == "__main__":
     # We need to keep the main thread alive for the bot's webhook to function.
     # The webhook handler in Flask will process updates.
     # For Render, the Flask app needs to be running in the main process to handle requests.
-    # Let's adjust this to run the Flask app directly if WEBHOOK_URL is set, otherwise run polling.
+    # The previous logic was attempting to run Flask directly or polling, which is incorrect for a webhook setup with a separate Flask server.
+    # The Flask server for the webhook needs to be started in the main thread to handle incoming requests from Telegram.
+    # The bot's `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
+    # Instead, the Flask app should be run directly in the main thread to serve the webhook.
 
     webhook_url = os.environ.get("WEBHOOK_URL")
     if webhook_url:
-        # If webhook is configured, run the Flask app directly
+        # If webhook is configured, run the Flask app directly in the main thread
+        # The Flask app will receive updates from Telegram and pass them to the bot application.
         port = int(os.environ.get("PORT", "10000"))
         logger.info(f"Starting Flask app for webhook on port {port}")
-    
+        app.run(host="0.0.0.0", port=port)
     else:
         # If no webhook, run polling (e.g., for local development or other deployment types)
         logger.info("WEBHOOK_URL not set. Starting bot polling...")
         application.run_polling(drop_pending_updates=True)
+
 
 
 
