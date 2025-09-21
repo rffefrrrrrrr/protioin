@@ -2,7 +2,7 @@ pymongo
 python-telegram-bot[webhooks]
 python-dotenv
 
-Flask
+Flask[async]
 
 
 gunicorn
