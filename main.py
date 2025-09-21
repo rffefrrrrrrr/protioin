@@ -1,4 +1,4 @@
-'''
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -16,8 +16,9 @@ from typing import Dict, Set
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
-from flask import Flask
+from flask import Flask, request
 import threading
+import json
 
 # MongoDB imports
 from pymongo import MongoClient
@@ -25,7 +26,7 @@ from pymongo.errors import ConnectionFailure
 
 # إعداد التسجيل
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
@@ -55,22 +56,17 @@ kick_tasks: Dict[str, asyncio.Task] = {}
 client: MongoClient = None
 db = None
 
-# Flask app for health check
-health_app = Flask(__name__)
+# Flask app
+app = Flask(__name__)
 
-@health_app.route("/health")
-def health_check():
-    return "OK", 200
-
-def run_flask_app():
-    port = int(os.environ.get("PORT", "10000")) # Render expects 10000 for health checks
-    health_app.run(host="0.0.0.0", port=port)
+# Telegram Bot Application
+application: Application = None
 
 def init_mongodb():
     global client, db
     try:
         client = MongoClient(MONGO_URI)
-        client.admin.command('ping') # The ping command is cheap and does not require auth. 
+        client.admin.command("ping") # The ping command is cheap and does not require auth.
         db = client.protection_bot_db
         logger.info("Connected to MongoDB successfully!")
     except ConnectionFailure as e:
@@ -132,11 +128,11 @@ async def get_stats(user_id: int = None, chat_id: int = None, hours: int = None)
         ]
         results = list(db.captcha_stats.aggregate(pipeline))
         
-        stats = {'success': 0, 'kicked': 0, 'timeout': 0}
+        stats = {"success": 0, "kicked": 0, "timeout": 0}
         for res in results:
             stats[res["_id"]] = res["count"]
         return stats
-    return {'success': 0, 'kicked': 0, 'timeout': 0}
+    return {"success": 0, "kicked": 0, "timeout": 0}
 
 async def get_bot_stats():
     """الحصول على إحصائيات البوت العامة"""
@@ -175,12 +171,12 @@ class CaptchaGenerator:
         """توليد سؤال رياضي بسيط"""
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
-        operation = random.choice(['+', '-', '*'])
+        operation = random.choice(["+", "-", "*"])
         
-        if operation == '+':
+        if operation == "+":
             answer = num1 + num2
             question = f"كم يساوي {num1} + {num2}؟"
-        elif operation == '-':
+        elif operation == "-":
             if num1 < num2:
                 num1, num2 = num2, num1
             answer = num1 - num2
@@ -221,11 +217,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update_user_info(user.id, user.username, user.first_name)
     
-    if update.effective_chat.type == 'private':
+    if update.effective_chat.type == "private":
         message_text = (
             "مرحباً! أنا بوت حماية المجموعات.\n"
             "أضفني إلى مجموعتك واجعلني مشرفاً لأتمكن من حمايتها.\n"
-            "استخدم الأمر 'تفعيل' في المجموعة لتفعيل نظام الحماية.\n"
+            "استخدم الأمر \'تفعيل\' في المجموعة لتفعيل نظام الحماية.\n"
         )
         
         main_keyboard = []
@@ -241,16 +237,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply_markup = InlineKeyboardMarkup(main_keyboard) if main_keyboard else None
         if update.message:
-            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode="HTML")
         elif update.callback_query:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
+            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode="HTML")
         else:
             logger.error("لا يوجد update.message أو update.callback_query في start_command")
 
     else:
         await update.message.reply_text(
             "مرحباً! أنا بوت الحماية.\n"
-            "استخدم الأمر 'تفعيل' لتفعيل نظام الحماية في هذه المجموعة."
+            "استخدم الأمر \'تفعيل\' لتفعيل نظام الحماية في هذه المجموعة."
         )
 
 async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -260,7 +256,7 @@ async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ['administrator', 'creator'] and user_id not in DEVELOPER_IDS:
+        if member.status not in ["administrator", "creator"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -282,7 +278,7 @@ async def disable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     try:
         member = await context.bot.get_chat_member(chat_id, user_id)
-        if member.status not in ['administrator', 'creator'] and user_id not in DEVELOPER_IDS:
+        if member.status not in ["administrator", "creator"] and user_id not in DEVELOPER_IDS:
             await update.effective_chat.send_message("عذراً، يمكن للمشرفين أو المطورين فقط إلغاء تفعيل نظام الحماية.")
             return
     except Exception as e:
@@ -341,10 +337,10 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             pending_users[chat_id] = {}
         
         pending_users[chat_id][user_id] = {
-            'correct_answer': correct_answer,
-            'join_time': datetime.now(),
-            'username': new_user.username or new_user.first_name,
-            'wrong_attempts': 0
+            "correct_answer": correct_answer,
+            "join_time": datetime.now(),
+            "username": new_user.username or new_user.first_name,
+            "wrong_attempts": 0
         }
         
         try:
@@ -361,10 +357,10 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                      f"❓ {question}\n\n"
                      f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.",
                 reply_markup=reply_markup,
-                parse_mode='HTML'
+                parse_mode="HTML"
             )
             
-            pending_users[chat_id][user_id]['message_id'] = captcha_message.message_id
+            pending_users[chat_id][user_id]["message_id"] = captcha_message.message_id
             
             task_key = f"{chat_id}_{user_id}"
             kick_task = asyncio.create_task(
@@ -402,7 +398,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
         return
     
     user_data = pending_users[chat_id][user_id]
-    correct_answer = user_data['correct_answer']
+    correct_answer = user_data["correct_answer"]
     
     if selected_answer == correct_answer:
         try:
@@ -424,12 +420,12 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
             if task_key in kick_tasks:
                 kick_tasks[task_key].cancel()
                 del kick_tasks[task_key]
-            await context.bot.send_message(chat_id, f"✅ أحسنت! {query.from_user.mention_html()} لقد أجبت بشكل صحيح. تم فك التقييد عنك.", parse_mode='HTML')
+            await context.bot.send_message(chat_id, f"✅ أحسنت! {query.from_user.mention_html()} لقد أجبت بشكل صحيح. تم فك التقييد عنك.", parse_mode="HTML")
             await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
             
             del pending_users[chat_id][user_id]
             
-            await log_captcha_event(user_id, chat_id, 'success')
+            await log_captcha_event(user_id, chat_id, "success")
         except Exception as e:
             logger.error(f"خطأ في إلغاء تقييد المستخدم {user_id} من {chat_id} بعد حل الكابتشا: {e}")
     else:
@@ -437,12 +433,12 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
         await query.answer("❌ إجابة خاطئة. حاول مرة أخرى.", show_alert=True)
         
         if user_data["wrong_attempts"] >= 2:
-            logger.info(f"محاولة طرد المستخدم {user_id} من {chat_id} بعد {user_data['wrong_attempts']} محاولات خاطئة.")
+            logger.info(f"محاولة طرد المستخدم {user_id} من {chat_id} بعد {user_data["wrong_attempts"]} محاولات خاطئة.")
             await context.bot.send_message(chat_id, f"❌ إجابات خاطئة متكررة. سيتم طردك. @{query.from_user.username or query.from_user.first_name}")
             try:
                 await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user who is currently restricted
                 await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-                await log_captcha_event(user_id, chat_id, 'kicked')
+                await log_captcha_event(user_id, chat_id, "kicked")
             except Exception as e:
                 logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد الإجابات الخاطئة المتكررة: {e}")
             
@@ -463,8 +459,8 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
         try:
             await context.bot.unban_chat_member(chat_id, user_id)
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد المستخدم @{pending_users[chat_id][user_id]['username']}.")
-            await log_captcha_event(user_id, chat_id, 'timeout')
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد المستخدم @{pending_users[chat_id][user_id]["username"]}.")
+            await log_captcha_event(user_id, chat_id, "timeout")
         except Exception as e:
             logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد انتهاء الوقت: {e}")
         finally:
@@ -486,14 +482,14 @@ async def dev_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         captcha_stats = await get_stats()
         message = (
             f"📊 **إحصائيات البوت** 📊\n\n"
-            f"👥 **إجمالي المجموعات:** {stats['total_chats']}\n"
-            f"👤 **إجمالي المستخدمين:** {stats['total_users']}\n\n"
+            f"👥 **إجمالي المجموعات:** {stats["total_chats"]}\n"
+            f"👤 **إجمالي المستخدمين:** {stats["total_users"]}\n\n"
             f"**إحصائيات الكابتشا:**\n"
-            f"✅ **الناجحة:** {captcha_stats['success']}\n"
-            f"❌ **المطرودون:** {captcha_stats['kicked']}\n"
-            f"⏰ **انتهى الوقت:** {captcha_stats['timeout']}"
+            f"✅ **الناجحة:** {captcha_stats["success"]}\n"
+            f"❌ **المطرودون:** {captcha_stats["kicked"]}\n"
+            f"⏰ **انتهى الوقت:** {captcha_stats["timeout"]}"
         )
-        await update.message.reply_text(message, parse_mode='Markdown')
+        await update.message.reply_text(message, parse_mode="Markdown")
 
     elif command == "/broadcast" and len(args) > 1:
         message_to_broadcast = " ".join(args[1:])
@@ -550,24 +546,28 @@ async def broadcast_to_users(update: Update, context: ContextTypes.DEFAULT_TYPE,
     
     await update.message.reply_text(f"✅ تم إرسال الرسالة الإذاعية بنجاح إلى {success_count} من {len(targets)} هدف.")
 
-def main():
-    """تشغيل البوت"""
-    try:
-        # استخدام قفل ملف لمنع تشغيل نسخ متعددة من البوت
-        lock_file = open("/tmp/protection_bot.lock", "w")
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except IOError:
-        logger.warning("نسخة أخرى من البوت تعمل بالفعل. سيتم الخروج.")
-        return
 
+@app.route("/health")
+def health_check():
+    return "OK", 200
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook_handler():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "", 200
+
+async def setup_bot():
+    global application
     init_mongodb()
 
     application = Application.builder().token(BOT_TOKEN).build()
 
     # معالجات الأوامر
     application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.Regex(re.compile(r'^تفعيل$', re.IGNORECASE)), enable_protection))
-    application.add_handler(MessageHandler(filters.Regex(re.compile(r'^تعطيل$', re.IGNORECASE)), disable_protection))
+    application.add_handler(MessageHandler(filters.Regex(re.compile(r"^تفعيل$", re.IGNORECASE)), enable_protection))
+    application.add_handler(MessageHandler(filters.Regex(re.compile(r"^تعطيل$", re.IGNORECASE)), disable_protection))
     application.add_handler(CommandHandler("stats", dev_command_handler))
     application.add_handler(CommandHandler("broadcast", dev_command_handler))
     application.add_handler(CommandHandler("broadcast_users", admin_command_handler))
@@ -576,38 +576,29 @@ def main():
     application.add_handler(ChatMemberHandler(new_member_handler, ChatMemberHandler.CHAT_MEMBER))
 
     # معالج ردود الكابتشا
-    application.add_handler(CallbackQueryHandler(captcha_callback_handler, pattern=r'^captcha_'))
+    application.add_handler(CallbackQueryHandler(captcha_callback_handler, pattern=r"^captcha_"))
 
     # معالج أزرار القوائم
-    application.add_handler(CallbackQueryHandler(start_command, pattern=r'^(dev_commands_menu|admin_commands_menu)$'))
+    application.add_handler(CallbackQueryHandler(start_command, pattern=r"^(dev_commands_menu|admin_commands_menu)$"))
 
-    print("🤖 بدء تشغيل بوت الحماية...")
-    try:
-        # إعداد Webhook
-        port = int(os.environ.get("PORT", "8080")) # استخدم المنفذ الذي يوفره Render
-        webhook_url = os.environ.get("WEBHOOK_URL") # يجب أن يتم توفير هذا المتغير في Render
+    # Set the webhook
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        await application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
+        logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
+    else:
+        logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
-        if webhook_url:
-            application.run_webhook(
-                listen="0.0.0.0",
-                port=port,
-                url_path=BOT_TOKEN, # هذا هو المسار الذي سيستمع إليه البوت
-                webhook_url=f"{webhook_url}/{BOT_TOKEN}"
-            )
-            print(f"البوت يعمل الآن على المنفذ {port} باستخدام Webhook.")
-        else:
-            print("لم يتم العثور على WEBHOOK_URL. سيتم استخدام Long Polling.")
-            application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Start the application in webhook mode (it will not poll)
+    await application.start()
 
-    except Exception as e:
-        logger.error(f"Error running bot: {e}")
+if __name__ == "__main__":
+    # Run the bot setup in an asyncio event loop
+    asyncio.run(setup_bot())
 
-if __name__ == '__main__':
-    # Start Flask health check in a separate thread
-    flask_thread = threading.Thread(target=run_flask_app)
-    flask_thread.daemon = True # Allow main program to exit even if thread is still running
-    flask_thread.start()
+    # Get the port from environment variable, default to 10000 for Render health checks
+    port = int(os.environ.get("PORT", "10000"))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host="0.0.0.0", port=port)
 
-    main()
-'''
 
