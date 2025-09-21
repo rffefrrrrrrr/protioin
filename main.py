@@ -519,7 +519,16 @@ async def main():
         await application.bot.set_webhook(url=WEBHOOK_URL)
 
     # تشغيل الويب هوك
+    logger.info("Attempting to set Telegram webhook...")
     await set_telegram_webhook()
+    logger.info("Telegram webhook set successfully.")
+
+    # بدء تشغيل البوت
+    logger.info("Starting bot polling (if not webhook) or keeping application alive...")
+    # For webhook, the application needs to stay alive to receive requests
+    # The gunicorn server will handle keeping the Flask app alive.
+    # No explicit polling start is needed here for webhook mode.
+    logger.info("Bot startup sequence completed.")
 
 if __name__ == '__main__':
     asyncio.run(main())
