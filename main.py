@@ -590,7 +590,7 @@ async def setup_bot():
         logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
     # Start the application in webhook mode (it will not poll)
-    # We don\\'t call application.start() here because Flask will handle the webhook reception
+    # We don't call application.start() here because Flask will handle the webhook reception
     # and pass updates to application.process_update()
 
 if __name__ == "__main__":
