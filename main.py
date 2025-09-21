@@ -650,7 +650,22 @@ def main():
 
     print("🤖 بدء تشغيل بوت الحماية...")
     try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # إعداد Webhook
+        port = int(os.environ.get("PORT", "8080")) # استخدم المنفذ الذي يوفره Render
+        webhook_url = os.environ.get("WEBHOOK_URL") # يجب أن يتم توفير هذا المتغير في Render
+
+        if webhook_url:
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=BOT_TOKEN, # هذا هو المسار الذي سيستمع إليه البوت
+                webhook_url=f"{webhook_url}/{BOT_TOKEN}"
+            )
+            print(f"البوت يعمل الآن على المنفذ {port} باستخدام Webhook.")
+        else:
+            print("لم يتم العثور على WEBHOOK_URL. سيتم استخدام Long Polling.")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+
     except Exception as e:
         logger.error(f"Error running bot: {e}")
 
