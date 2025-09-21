@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -9,14 +10,16 @@ import re
 import logging
 import asyncio
 import random
-import sqlite3
-
 import fcntl
 from datetime import datetime, timedelta
 from typing import Dict, Set
 import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMember
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
+
+# MongoDB imports
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 
 # إعداد التسجيل
 logging.basicConfig(
@@ -25,20 +28,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# توكن البوت
+# توكن البوت ومتغيرات البيئة
 import os
 from dotenv import load_dotenv
 
 load_dotenv()  # لتحميل المتغيرات من ملف .env
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-print(BOT_TOKEN)  # للتأكد إنه تقرأه صح
+MONGO_URI = os.getenv("MONGO_URI")
 
 # معرفات المطورين (User IDs)
 DEVELOPER_IDS = [6714288409, 6459577996]
 
-# قاموس لتخزين حالة الحماية لكل مجموعة
+# قاموس لتخزين حالة الحماية لكل مجموعة (للتخزين المؤقت في الذاكرة)
 protection_enabled: Dict[int, bool] = {}
 
 # قاموس لتخزين الأعضاء الجدد الذين ينتظرون حل الكابتشا
@@ -47,171 +49,110 @@ pending_users: Dict[int, Dict[int, dict]] = {}
 # قاموس لتخزين مهام الطرد المؤجلة
 kick_tasks: Dict[str, asyncio.Task] = {}
 
-# قاعدة البيانات
-DATABASE_PATH = "protection_bot.db"
+# MongoDB Client and Database
+client: MongoClient = None
+db = None
 
-def init_database():
-    """تهيئة قاعدة البيانات"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    # جدول الإحصائيات
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS captcha_stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            chat_id INTEGER NOT NULL,
-            status TEXT NOT NULL,  -- 'success', 'kicked', 'timeout'
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # جدول المستخدمين (لتتبع من تفاعل مع البوت)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            last_interaction DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # جدول المجموعات (لتتبع المجموعات التي يتواجد فيها البوت)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chats (
-            chat_id INTEGER PRIMARY KEY,
-            chat_title TEXT,
-            protection_enabled BOOLEAN DEFAULT FALSE,
-            activating_admin_id INTEGER,
-            last_activity DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+def init_mongodb():
+    global client, db
+    try:
+        client = MongoClient(MONGO_URI)
+        client.admin.command('ping') # The ping command is cheap and does not require auth. 
+        db = client.protection_bot_db
+        logger.info("Connected to MongoDB successfully!")
+    except ConnectionFailure as e:
+        logger.error(f"MongoDB connection failed: {e}")
+        raise
 
-def log_captcha_event(user_id: int, chat_id: int, status: str):
+async def log_captcha_event(user_id: int, chat_id: int, status: str):
     """تسجيل حدث كابتشا في قاعدة البيانات"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        INSERT INTO captcha_stats (user_id, chat_id, status)
-        VALUES (?, ?, ?)
-    ''', (user_id, chat_id, status))
-    
-    conn.commit()
-    conn.close()
+    if db is not None:
+        db.captcha_stats.insert_one({
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "status": status,
+            "timestamp": datetime.now()
+        })
 
-def update_user_info(user_id: int, username: str = None, first_name: str = None):
+async def update_user_info(user_id: int, username: str = None, first_name: str = None):
     """تحديث معلومات المستخدم في قاعدة البيانات"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, username, first_name, last_interaction)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (user_id, username, first_name))
-    
-    conn.commit()
-    conn.close()
+    if db is not None:
+        db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {
+                "username": username,
+                "first_name": first_name,
+                "last_interaction": datetime.now()
+            }},
+            upsert=True
+        )
 
-def update_chat_info(chat_id: int, chat_title: str = None, protection_enabled: bool = None, admin_id: int = None):
+async def update_chat_info(chat_id: int, chat_title: str = None, protection_enabled_status: bool = None, admin_id: int = None):
     """تحديث معلومات المجموعة في قاعدة البيانات"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    if protection_enabled is not None:
-        cursor.execute('''
-            INSERT OR REPLACE INTO chats (chat_id, chat_title, protection_enabled, activating_admin_id, last_activity)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ''', (chat_id, chat_title, protection_enabled, admin_id))
-    else:
-        cursor.execute('''
-            INSERT OR IGNORE INTO chats (chat_id, chat_title, last_activity)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-        ''', (chat_id, chat_title))
-    
-    conn.commit()
-    conn.close()
+    if db is not None:
+        update_data = {"chat_title": chat_title, "last_activity": datetime.now()}
+        if protection_enabled_status is not None:
+            update_data["protection_enabled"] = protection_enabled_status
+        if admin_id is not None:
+            update_data["activating_admin_id"] = admin_id
 
-def get_stats(user_id: int = None, chat_id: int = None, hours: int = None):
+        db.chats.update_one(
+            {"chat_id": chat_id},
+            {"$set": update_data},
+            upsert=True
+        )
+
+async def get_stats(user_id: int = None, chat_id: int = None, hours: int = None):
     """الحصول على الإحصائيات"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    query = "SELECT status, COUNT(*) FROM captcha_stats WHERE 1=1"
-    params = []
-    
-    if chat_id:
-        query += " AND chat_id = ?"
-        params.append(chat_id)
-    
-    if user_id:
-        query += " AND user_id = ?"
-        params.append(user_id)
-    
-    if hours:
-        query += " AND timestamp >= datetime('now', '-{} hours')".format(hours)
-    
-    query += " GROUP BY status"
-    
-    cursor.execute(query, params)
-    results = cursor.fetchall()
-    
-    stats = {'success': 0, 'kicked': 0, 'timeout': 0}
-    for status, count in results:
-        stats[status] = count
-    
-    conn.close()
-    return stats
+    if db is not None:
+        query = {}
+        if chat_id:
+            query["chat_id"] = chat_id
+        if user_id:
+            query["user_id"] = user_id
+        if hours:
+            query["timestamp"] = {"$gte": datetime.now() - timedelta(hours=hours)}
+        
+        pipeline = [
+            {"$match": query},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+        ]
+        results = list(db.captcha_stats.aggregate(pipeline))
+        
+        stats = {'success': 0, 'kicked': 0, 'timeout': 0}
+        for res in results:
+            stats[res["_id"]] = res["count"]
+        return stats
+    return {'success': 0, 'kicked': 0, 'timeout': 0}
 
-def get_bot_stats():
+async def get_bot_stats():
     """الحصول على إحصائيات البوت العامة"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(DISTINCT chat_id) FROM chats")
-    total_chats = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(DISTINCT user_id) FROM users")
-    total_users = cursor.fetchone()[0]
-    
-    conn.close()
-    return {"total_chats": total_chats, "total_users": total_users}
+    if db is not None:
+        total_chats = db.chats.count_documents({})
+        total_users = db.users.count_documents({})
+        return {"total_chats": total_chats, "total_users": total_users}
+    return {"total_chats": 0, "total_users": 0}
 
-def get_all_users():
+async def get_all_users():
     """الحصول على جميع المستخدمين"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT user_id FROM users")
-    users = [row[0] for row in cursor.fetchall()]
-    
-    conn.close()
-    return users
+    if db is not None:
+        users = list(db.users.find({}, {"user_id": 1, "_id": 0}))
+        return [user["user_id"] for user in users]
+    return []
 
-def get_all_chats():
+async def get_all_chats():
     """الحصول على جميع المجموعات التي تم تفعيل الحماية فيها"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT chat_id FROM chats WHERE protection_enabled = TRUE")
-    chats = [row[0] for row in cursor.fetchall()]
-    
-    conn.close()
-    return chats
+    if db is not None:
+        chats = list(db.chats.find({"protection_enabled": True}, {"chat_id": 1, "_id": 0}))
+        return [chat["chat_id"] for chat in chats]
+    return []
 
-def is_activating_admin(user_id: int) -> bool:
+async def is_activating_admin(user_id: int) -> bool:
     """التحقق مما إذا كان المستخدم هو المشرف الذي قام بتفعيل البوت في أي مجموعة"""
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT 1 FROM chats WHERE protection_enabled = TRUE AND activating_admin_id = ? LIMIT 1", (user_id,))
-    result = cursor.fetchone()
-    
-    conn.close()
-    return result is not None
+    if db is not None:
+        count = db.chats.count_documents({"protection_enabled": True, "activating_admin_id": user_id})
+        return count > 0
+    return False
 
 class CaptchaGenerator:
     """مولد أسئلة الكابتشا"""
@@ -261,10 +202,11 @@ class CaptchaGenerator:
         return options
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"start_command: Received /start command from user {update.effective_user.id} in chat type {update.effective_chat.type}")
     """معالج أمر /start"""
     user = update.effective_user
     
-    update_user_info(user.id, user.username, user.first_name)
+    await update_user_info(user.id, user.username, user.first_name)
     
     if update.effective_chat.type == 'private':
         message_text = (
@@ -278,7 +220,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.id in DEVELOPER_IDS:
             main_keyboard.append([InlineKeyboardButton("⚙️ أوامر المطورين", callback_data="dev_commands_menu")])
 
-        if is_activating_admin(user.id):
+        if await is_activating_admin(user.id):
             main_keyboard.append([InlineKeyboardButton("🛠️ أوامر المشرفين", callback_data="admin_commands_menu")])
 
         if not main_keyboard:
@@ -286,9 +228,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         reply_markup = InlineKeyboardMarkup(main_keyboard) if main_keyboard else None
         if update.message:
-            await update.message.reply_text(message_text, reply_markup=reply_markup)
+            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
         elif update.callback_query:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='HTML')
         else:
             logger.error("لا يوجد update.message أو update.callback_query في start_command")
 
@@ -312,7 +254,7 @@ async def enable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"خطأ في التحقق من صلاحيات المستخدم: {e}")
         return
     
-    update_chat_info(chat_id, update.effective_chat.title, True, user_id)
+    await update_chat_info(chat_id, update.effective_chat.title, True, user_id)
     protection_enabled[chat_id] = True
     await update.message.reply_text(
         "✅ تم تفعيل نظام الحماية بنجاح!\n"
@@ -334,7 +276,7 @@ async def disable_protection(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.error(f"خطأ في التحقق من صلاحيات المستخدم: {e}")
         return
     
-    update_chat_info(chat_id, update.effective_chat.title, False, None)
+    await update_chat_info(chat_id, update.effective_chat.title, False, None)
     protection_enabled[chat_id] = False
     
     tasks_to_cancel = []
@@ -474,40 +416,20 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
             
             del pending_users[chat_id][user_id]
             
-            log_captcha_event(user_id, chat_id, 'success')
+            await log_captcha_event(user_id, chat_id, 'success')
         except Exception as e:
-            logger.error(f"خطأ في إلغاء تقييد العضو: {e}")
+            logger.error(f"خطأ في إلغاء تقييد المستخدم {user_id} من {chat_id} بعد حل الكابتشا: {e}")
     else:
         user_data["wrong_attempts"] += 1
+        await query.answer("❌ إجابة خاطئة. حاول مرة أخرى.", show_alert=True)
         
-        if user_data["wrong_attempts"] == 1:
-            question, correct_answer = CaptchaGenerator.generate_math_captcha()
-            options = CaptchaGenerator.generate_options(correct_answer)
-            
-            keyboard = []
-            for i, option in enumerate(options):
-                keyboard.append([InlineKeyboardButton(str(option), callback_data=f"captcha_{user_id}_{option}")])
-            
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            await query.edit_message_text(
-                chat_id=chat_id,
-                message_id=query.message.message_id,
-                text=f"إجابة خاطئة! يرجى المحاولة مرة أخرى.\n\n"
-                     f"❓ {question}\n\n"
-                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.",
-                reply_markup=reply_markup,
-                parse_mode='HTML'
-            )
-            pending_users[chat_id][user_id]['correct_answer'] = correct_answer
-            
-        elif user_data["wrong_attempts"] >= 2:
+        if user_data["wrong_attempts"] >= 2:
             logger.info(f"محاولة طرد المستخدم {user_id} من {chat_id} بعد {user_data['wrong_attempts']} محاولات خاطئة.")
             await context.bot.send_message(chat_id, f"❌ إجابات خاطئة متكررة. سيتم طردك. @{query.from_user.username or query.from_user.first_name}")
             try:
                 await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user who is currently restricted
                 await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-                log_captcha_event(user_id, chat_id, 'kicked')
+                await log_captcha_event(user_id, chat_id, 'kicked')
             except Exception as e:
                 logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد الإجابات الخاطئة المتكررة: {e}")
             
@@ -534,7 +456,7 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
             username = user_data['username']
             await context.bot.send_message(chat_id, f"⏰ انتهت مهلة الكابتشا. تم طرد المستخدم @{username} لعدم حل الكابتشا.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            log_captcha_event(user_id, chat_id, 'timeout')
+            await log_captcha_event(user_id, chat_id, 'timeout')
             del pending_users[chat_id][user_id]
         except Exception as e:
             logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد انتهاء المهلة: {e}")
@@ -564,13 +486,13 @@ async def admin_commands_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
 
-    if not is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
+    if not await is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
         await query.edit_message_text("عذراً، هذه الأوامر متاحة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
         return
 
     keyboard = [
         [InlineKeyboardButton("📊 إحصائيات مجموعتي", callback_data="admin_stats_show")],
-        [InlineKeyboardButton("🔙 رجوع", callback_data="admin_commands_menu")]
+        [InlineKeyboardButton("🔙 رجوع", callback_data="start_menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text("🛠️ أوامر المشرفين:", reply_markup=reply_markup)
@@ -585,7 +507,7 @@ async def show_bot_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("عذراً، هذه الإحصائيات متاحة للمطورين فقط.")
         return
 
-    stats = get_bot_stats()
+    stats = await get_bot_stats()
     text = f"📊 إحصائيات البوت العامة:\n\n"
     text += f"👥 إجمالي المستخدمين: {stats['total_users']}\n"
     text += f"🏘️ إجمالي المجموعات: {stats['total_chats']}\n"
@@ -602,21 +524,24 @@ async def show_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    chat_id = update.effective_chat.id
-
-    if not is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
+    if not await is_activating_admin(user.id) and user.id not in DEVELOPER_IDS:
         await query.edit_message_text("عذراً، هذه الإحصائيات متاحة للمشرفين الذين قاموا بتفعيل البوت في مجموعاتهم فقط.")
         return
 
-    stats = get_stats(chat_id=chat_id)
-    success_count = stats.get('success', 0)
-    kicked_count = stats.get('kicked', 0)
-    timeout_count = stats.get('timeout', 0)
+    # Fetch chat_id for the admin
+    chat_info = db.chats.find_one({"activating_admin_id": user.id, "protection_enabled": True})
+    if not chat_info:
+        await query.edit_message_text("لم يتم العثور على مجموعة مفعلة بواسطة هذا المشرف.")
+        return
+    
+    chat_id = chat_info["chat_id"]
+    chat_title = chat_info["chat_title"]
 
-    text = f"📊 إحصائيات الكابتشا لمجموعتك:\n\n"
-    text += f"✅ نجاح التحقق: {success_count}\n"
-    text += f"❌ طرد (إجابة خاطئة): {kicked_count}\n"
-    text += f"⏰ طرد (انتهاء المهلة): {timeout_count}\n"
+    stats = await get_stats(chat_id=chat_id)
+    text = f"📊 إحصائيات المجموعة ({chat_title}):\n\n"
+    text += f"✅ حل الكابتشا بنجاح: {stats['success']}\n"
+    text += f"❌ تم الطرد (إجابة خاطئة): {stats['kicked']}\n"
+    text += f"⏰ تم الطرد (انتهت المهلة): {stats['timeout']}\n"
 
     keyboard = [
         [InlineKeyboardButton("🔙 رجوع", callback_data="admin_commands_menu")]
@@ -624,100 +549,90 @@ async def show_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(text, reply_markup=reply_markup)
 
-async def broadcast_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, broadcast_type: str):
+async def broadcast_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, target_type: str):
     """طلب رسالة الإذاعة من المطور"""
-    user_id = update.effective_user.id
+    user = update.effective_user
     query = update.callback_query
     await query.answer()
 
-    if user_id not in DEVELOPER_IDS:
-        await query.edit_message_text("عذراً، هذا الأمر متاح للمطورين فقط.")
+    if user.id not in DEVELOPER_IDS:
+        await query.edit_message_text("عذراً، هذه الأوامر متاحة للمطورين فقط.")
         return
 
-    context.user_data['broadcast_type'] = broadcast_type
-    await query.edit_message_text("الرجاء إرسال الرسالة التي تريد إذاعتها الآن.")
-
-async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالج رسائل الإذاعة"""
-    user_id = update.effective_user.id
-    if user_id not in DEVELOPER_IDS:
-        return
-
-    if 'broadcast_type' not in context.user_data:
-        logger.warning("handle_broadcast_message: broadcast_type not found in user_data")
-        return
-
-    broadcast_type = context.user_data.pop('broadcast_type')
-    message_to_broadcast = update.message.text
-
-    sent_count = 0
-    if broadcast_type == 'users':
-        targets = get_all_users()
-        for target_id in targets:
-            try:
-                await context.bot.send_message(chat_id=target_id, text=message_to_broadcast)
-                sent_count += 1
-                await asyncio.sleep(0.1)  # لتجنب تجاوز حدود API
-            except Exception as e:
-                logger.warning(f"فشل إرسال رسالة إذاعية للمستخدم {target_id}: {e}")
-        await update.message.reply_text(f"تم إرسال الرسالة الإذاعية إلى {sent_count} مستخدم.")
-
-    elif broadcast_type == 'chats_all':
-        targets = get_all_chats()
-        logger.info(f"handle_broadcast_message: Found {len(targets)} targets for broadcast type '{broadcast_type}'")
-        for target_id in targets:
-            try:
-                await context.bot.send_message(chat_id=target_id, text=message_to_broadcast)
-                sent_count += 1
-                await asyncio.sleep(0.1)  # لتجنب تجاوز حدود API
-            except Exception as e:
-                logger.warning(f"فشل إرسال رسالة إذاعية للمجموعة {target_id}: {e}")
-        await update.message.reply_text(f"تم إرسال الرسالة الإذاعية إلى {sent_count} مجموعة.")
+    context.user_data['broadcast_target_type'] = target_type
+    await query.edit_message_text(
+        "الرجاء إرسال الرسالة التي ترغب في إذاعتها.\n"
+        "(يمكنك استخدام HTML للتنسيق)"
+    )
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج الرسائل النصية"""
-    if not update.message or not update.message.text:
-        return
-    
-    text = update.message.text.strip()
+    user = update.effective_user
     chat_id = update.effective_chat.id
-    
-    logger.info(f"handle_text_message: Received text '{text}' in chat_id {chat_id}, chat_type {update.effective_chat.type}")
+    message_text = update.message.text
 
-    # التحقق من أمر التفعيل
-    if text == "تفعيل":
+    logger.info(f"handle_text_message: Received text '{message_text}' in chat_id {chat_id}, chat_type {update.effective_chat.type}")
+
+    if 'broadcast_target_type' in context.user_data and user.id in DEVELOPER_IDS:
+        target_type = context.user_data.pop('broadcast_target_type')
+        await broadcast_message(update, context, message_text, target_type)
+    elif message_text == "تفعيل" and update.effective_chat.type != 'private':
         await enable_protection(update, context)
-    elif text == "إلغاء":
+    elif message_text == "تعطيل" and update.effective_chat.type != 'private':
         await disable_protection(update, context)
-    elif 'broadcast_type' in context.user_data and update.effective_user.id in DEVELOPER_IDS:
-        await handle_broadcast_message(update, context)
 
-def main() -> None:
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str, target_type: str):
+    """إرسال رسالة إذاعية إلى المستخدمين أو المجموعات"""
+    user = update.effective_user
+    if user.id not in DEVELOPER_IDS:
+        return
+
+    if target_type == 'users':
+        targets = await get_all_users()
+    elif target_type == 'chats_all':
+        targets = await get_all_chats()
+    else:
+        await update.message.reply_text("نوع الإذاعة غير صالح.")
+        return
+
+    logger.info(f"handle_broadcast_message: Found {len(targets)} targets for broadcast type '{target_type}'")
+
+    success_count = 0
+    for target_id in targets:
+        try:
+            await context.bot.send_message(target_id, message, parse_mode='HTML')
+            success_count += 1
+            await asyncio.sleep(0.05)  # لتجنب تجاوز حدود API
+        except Exception as e:
+            logger.error(f"خطأ في إرسال رسالة إذاعية إلى {target_id}: {e}")
+    
+    await update.message.reply_text(f"✅ تم إرسال الرسالة الإذاعية بنجاح إلى {success_count} من {len(targets)} هدف.")
+
+def main():
     """تشغيل البوت"""
-    init_database()
-
-    # التأكد من عدم تشغيل نسخة أخرى من البوت
     try:
+        # استخدام قفل ملف لمنع تشغيل نسخ متعددة من البوت
         lock_file = open("/tmp/protection_bot.lock", "w")
         fcntl.lockf(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except IOError:
         print("⛔ نسخة أخرى من البوت تعمل بالفعل. الخروج...")
         return
 
+    # تهيئة MongoDB
+    init_mongodb()
+
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # تحميل حالة الحماية من قاعدة البيانات
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT chat_id, protection_enabled FROM chats")
-    for chat_id, enabled in cursor.fetchall():
-        protection_enabled[chat_id] = bool(enabled)
-    conn.close()
-    
-    # Handlers for main menu buttons
+    # تحميل حالة الحماية من قاعدة البيانات (MongoDB)
+    # يجب أن تكون هذه العملية غير متزامنة، ولكنها في main() synchronous context
+    # سنقوم بتحميلها عند الحاجة أو في بداية كل معالج
+    # for now, we will rely on fetching from DB in each handler
+
+    # Handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CallbackQueryHandler(start_command, pattern="^start_menu$"))
     application.add_handler(CallbackQueryHandler(dev_commands_menu, pattern="^dev_commands_menu$"))
     application.add_handler(CallbackQueryHandler(admin_commands_menu, pattern="^admin_commands_menu$"))
-    application.add_handler(CallbackQueryHandler(start_command, pattern="^start_menu$"))
 
     # Handlers for developer sub-menu
     application.add_handler(CallbackQueryHandler(show_bot_stats, pattern="^bot_stats_show$"))
@@ -734,10 +649,12 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
     print("🤖 بدء تشغيل بوت الحماية...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"Error running bot: {e}")
 
 
 if __name__ == '__main__':
     main()
-
 
