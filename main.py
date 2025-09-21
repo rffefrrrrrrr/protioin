@@ -463,7 +463,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 text=f"مرحباً {query.from_user.mention_html()}!\n\n"
                      f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n"
                      f"❓ {question}\n\n"
-                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.",
+                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردهم تلقائياً.",
                 reply_markup=reply_markup,
                 parse_mode="HTML"
             )
@@ -476,7 +476,7 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
     
     if chat_id in pending_users and user_id in pending_users[chat_id]:
         try:
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id]["username"]} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id][\"username\"]} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await kick_user(context, chat_id, user_id)
             await log_captcha_event(user_id, chat_id, "timeout")
@@ -577,12 +577,8 @@ async def broadcast_to_users(update: Update, context: ContextTypes.DEFAULT_TYPE,
 def health_check():
     return "OK", 200
 
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def webhook_handler():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
-    return "", 200
+# Global variable to hold the Application instance
+application: Application = None
 
 async def setup_bot():
     global application
@@ -615,32 +611,24 @@ async def setup_bot():
     else:
         logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
-    # We don't call application.start() or application.run_webhook() here.
-    # The Flask app will handle the incoming webhook requests and pass them to application.process_update().
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook_handler():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "", 200
+
 
 if __name__ == "__main__":
-    # Run the bot setup in an asyncio event loop
-    asyncio.run(setup_bot())
+    # Ensure the Application is initialized before Flask starts
+    # This is a common pattern for integrating asyncio with Flask
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(setup_bot())
 
-    # The Flask server is already started in a separate thread by start_keep_alive_server() called in setup_bot()
-    # We need to keep the main thread alive for the bot's webhook to function.
-    # The webhook handler in Flask will process updates.
-    # For Render, the Flask app needs to be running in the main process to handle requests.
-    # The previous logic was attempting to run Flask directly or polling, which is incorrect for a webhook setup with a separate Flask server.
-    # The Flask server for the webhook needs to be started in the main thread to handle incoming requests from Telegram.
-    # The bot's `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
-    # Instead, the Flask app should be run directly in the main thread to serve the webhook.
+    # Run the Flask app
+    app.run(host="0.0.0.0", port=PORT, debug=False)
 
-    webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url:        # If webhook is configured, set the webhook and then run the Flask app directly.
-        # Render will manage the process, so we just need to ensure the Flask app is listening.
-        port = int(os.environ.get("PORT", 8000))
-        # The webhook is already set in setup_bot, so we just need to run the Flask app.
-        app.run(host="0.0.0.0", port=port, debug=False)
-    else:
-        # If no webhook, run polling (e.g., for local development or other deployment types)
-        logger.info("WEBHOOK_URL not set. Starting bot polling...")
-        application.run_polling(drop_pending_updates=True)
 
 
 
