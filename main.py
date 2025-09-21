@@ -77,19 +77,9 @@ async def telegram_webhook():
     return "ok"
 
 
-def run_flask():
-    """تشغيل خادم Flask في خيط منفصل"""
-    try:
-        # Ensure it listens on 0.0.0.0 to be accessible externally
-        app.run(host="0.0.0.0", port=PORT)
-    except Exception as e:
-        logger.error(f"Flask server failed: {e}", exc_info=True)
 
-def start_keep_alive_server():
-    """Starts the Flask server in a daemon thread."""
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info(f"Keep-alive Flask server started in background thread on port {PORT}")
+
+
 
 # Telegram Bot Application
 application: Application = None
@@ -594,8 +584,7 @@ async def setup_bot():
     global application
     init_mongodb()
 
-    # Start the Flask keep-alive server in a background thread
-    start_keep_alive_server()
+
 
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -648,11 +637,15 @@ if __name__ == "__main__":
     # Instead, the Flask app should be run directly in the main thread to serve the webhook.
 
     webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url:
-        # If webhook is configured, run the Flask app directly in the main thread
-        # The Flask app will receive updates from Telegram and pass them to the bot application.
-        port = int(os.environ.get("PORT", "10000"))
-        logger.info(f"Starting Flask app for webhook on port {port}")
+    if webhook_url        # If webhook is configured, set the webhook and then run the Flask app directly.
+        # Render will manage the process, so we just need to ensure the Flask app is listening.
+        port = int(os.environ.get("PORT", 8000))
+        # Set the webhook first
+        await application.bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to {webhook_url}")
+        # Then run the Flask app to listen for updates
+        app.run(host="0.0.0.0", port=port, debug=False)
+ok on port {port}")
         app.run(host="0.0.0.0", port=port)
     else:
         # If no webhook, run polling (e.g., for local development or other deployment types)
