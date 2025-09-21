@@ -18,6 +18,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMem
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ChatMemberHandler, filters, ContextTypes
 from flask import Flask, request
 import threading
+import time
 import json
 
 # MongoDB imports
@@ -58,6 +59,29 @@ db = None
 
 # Flask app
 app = Flask(__name__)
+
+# Use PORT environment variable provided by Render, default to 8000
+PORT = int(os.environ.get("PORT", 8000))
+flask_start_time = time.time()
+
+@app.route("/")
+def home():
+    uptime_minutes = (time.time() - flask_start_time) / 60
+    return f"Bot is running! Uptime: {uptime_minutes:.2f} minutes."
+
+def run_flask():
+    """تشغيل خادم Flask في خيط منفصل"""
+    try:
+        # Ensure it listens on 0.0.0.0 to be accessible externally
+        app.run(host="0.0.0.0", port=PORT)
+    except Exception as e:
+        logger.error(f"Flask server failed: {e}", exc_info=True)
+
+def start_keep_alive_server():
+    """Starts the Flask server in a daemon thread."""
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info(f"Keep-alive Flask server started in background thread on port {PORT}")
 
 # Telegram Bot Application
 application: Application = None
@@ -562,6 +586,9 @@ async def setup_bot():
     global application
     init_mongodb()
 
+    # Start the Flask keep-alive server in a background thread
+    start_keep_alive_server()
+
     application = Application.builder().token(BOT_TOKEN).build()
 
     # معالجات الأوامر
@@ -597,9 +624,23 @@ if __name__ == "__main__":
     # Run the bot setup in an asyncio event loop
     asyncio.run(setup_bot())
 
-    # Get the port from environment variable, default to 10000 for Render health checks
-    port = int(os.environ.get("PORT", "10000"))
-    logger.info(f"Starting Flask app on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    # The Flask server is already started in a separate thread by start_keep_alive_server() called in setup_bot()
+    # We need to keep the main thread alive for the bot's webhook to function.
+    # The webhook handler in Flask will process updates.
+    # For Render, the Flask app needs to be running in the main process to handle requests.
+    # Let's adjust this to run the Flask app directly if WEBHOOK_URL is set, otherwise run polling.
+
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        # If webhook is configured, run the Flask app directly
+        port = int(os.environ.get("PORT", "10000"))
+        logger.info(f"Starting Flask app for webhook on port {port}")
+    
+    else:
+        # If no webhook, run polling (e.g., for local development or other deployment types)
+        logger.info("WEBHOOK_URL not set. Starting bot polling...")
+        application.run_polling(drop_pending_updates=True)
+
+
 
 

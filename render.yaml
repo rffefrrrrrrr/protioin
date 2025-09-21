@@ -1,17 +1,20 @@
 services:
   - type: web
-    name: telegram-protection-bot
-    env: node
-    plan: free
-    buildCommand: npm install && pip3 install --upgrade pip && pip3 install -r requirements.txt --no-cache-dir
-    startCommand: npm start
+    name: protioin-bot
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py" # استخدام main.py كنقطة دخول
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: BOT_TOKEN
-        sync: false
-      - key: DATABASE_URL
-        sync: false
-    healthCheckPath: /health
-  
+        sync: false # يجب تعيينه يدوياً في Render.com
+      - key: MONGO_URI
+        sync: false # يجب تعيينه يدوياً في Render.com
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+    healthCheckPath: /
+    autoDeploy: true
+    # disk:
+    #   name: bot-data
+    #   mountPath: /data
+    #   sizeGB: 1 # يمكن تفعيل هذا إذا كنت بحاجة إلى تخزين دائم لقاعدة البيانات (مثل SQLite)
 
