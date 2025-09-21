@@ -476,7 +476,7 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
     
     if chat_id in pending_users and user_id in pending_users[chat_id]:
         try:
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id][\"username\"]} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id]['username']} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await kick_user(context, chat_id, user_id)
             await log_captcha_event(user_id, chat_id, "timeout")
