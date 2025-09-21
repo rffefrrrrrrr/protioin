@@ -69,18 +69,6 @@ def home():
     uptime_minutes = (time.time() - flask_start_time) / 60
     return f"Bot is running! Uptime: {uptime_minutes:.2f} minutes."
 
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
-async def telegram_webhook():
-    if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
-    return "ok"
-
-
-
-
-
-
 # Telegram Bot Application
 application: Application = None
 
@@ -475,7 +463,7 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 text=f"مرحباً {query.from_user.mention_html()}!\n\n"
                      f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n"
                      f"❓ {question}\n\n"
-                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردهم تلقائياً.",
+                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردك تلقائياً.",
                 reply_markup=reply_markup,
                 parse_mode="HTML"
             )
@@ -488,7 +476,7 @@ async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_i
     
     if chat_id in pending_users and user_id in pending_users[chat_id]:
         try:
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id]["username"]} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id][\"username\"]} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
             await kick_user(context, chat_id, user_id)
             await log_captcha_event(user_id, chat_id, "timeout")
@@ -600,8 +588,6 @@ async def setup_bot():
     global application
     init_mongodb()
 
-
-
     application = Application.builder().token(BOT_TOKEN).build()
 
     # معالجات الأوامر
@@ -626,40 +612,30 @@ async def setup_bot():
     if webhook_url:
         await application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
         logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
-
-    # We don\'t call application.start() or application.run_webhook() here.
-    # The Flask app will handle the incoming webhook requests and pass them to application.process_update().
-    # The main thread will be blocked by app.run() if webhook_url is set, which is the desired behavior for Render.
-    # a webhook setup on platforms like Render.com.
-
     else:
         logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
-    # Start the application in webhook mode (it will not poll)
-    # We don\'t call application.start() here because Flask will handle the webhook reception
-    # and pass updates to application.process_update()
+    # We don't call application.start() or application.run_webhook() here.
+    # The Flask app will handle the incoming webhook requests and pass them to application.process_update().
 
 if __name__ == "__main__":
     # Run the bot setup in an asyncio event loop
     asyncio.run(setup_bot())
 
     # The Flask server is already started in a separate thread by start_keep_alive_server() called in setup_bot()
-    # We need to keep the main thread alive for the bot\'s webhook to function.
+    # We need to keep the main thread alive for the bot's webhook to function.
     # The webhook handler in Flask will process updates.
     # For Render, the Flask app needs to be running in the main process to handle requests.
     # The previous logic was attempting to run Flask directly or polling, which is incorrect for a webhook setup with a separate Flask server.
     # The Flask server for the webhook needs to be started in the main thread to handle incoming requests from Telegram.
-    # The bot\'s `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
+    # The bot's `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
     # Instead, the Flask app should be run directly in the main thread to serve the webhook.
 
     webhook_url = os.environ.get("WEBHOOK_URL")
     if webhook_url:        # If webhook is configured, set the webhook and then run the Flask app directly.
         # Render will manage the process, so we just need to ensure the Flask app is listening.
         port = int(os.environ.get("PORT", 8000))
-        # Set the webhook first
-        asyncio.run(application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}"))
-        logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
-        # Then run the Flask app to listen for updates
+        # The webhook is already set in setup_bot, so we just need to run the Flask app.
         app.run(host="0.0.0.0", port=port, debug=False)
     else:
         # If no webhook, run polling (e.g., for local development or other deployment types)
