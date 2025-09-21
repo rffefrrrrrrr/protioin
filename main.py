@@ -26,7 +26,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # توكن البوت
-BOT_TOKEN = "7704479374:AAHvW7zJPVzySrgRFP7-U9j2BBF0N1a-z38"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # لتحميل المتغيرات من ملف .env
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+print(BOT_TOKEN)  # للتأكد إنه تقرأه صح
 
 # معرفات المطورين (User IDs)
 DEVELOPER_IDS = [6714288409, 6459577996]
