@@ -440,6 +440,166 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
                 await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
                 await log_captcha_event(user_id, chat_id, "kicked")
             except Exception as e:
-                logg
-(Content truncated due to size limit. Use page ranges or line ranges to read remaining content)
+                logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد الإجابات الخاطئة المتكررة: {e}")
+            
+            task_key = f"{chat_id}_{user_id}"
+            if task_key in kick_tasks:
+                kick_tasks[task_key].cancel()
+                del kick_tasks[task_key]
+            
+            if chat_id in pending_users and user_id in pending_users[chat_id]:
+                del pending_users[chat_id][user_id]
+
+async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int):
+    """جدولة طرد المستخدم بعد فترة زمنية"""
+    await asyncio.sleep(1800)  # 30 دقيقة
+    
+    if chat_id in pending_users and user_id in pending_users[chat_id]:
+        logger.info(f"طرد المستخدم {user_id} من {chat_id} بسبب انتهاء الوقت.")
+        try:
+            await context.bot.unban_chat_member(chat_id, user_id)
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد المستخدم @{pending_users[chat_id][user_id]["username"]}.")
+            await log_captcha_event(user_id, chat_id, "timeout")
+        except Exception as e:
+            logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد انتهاء الوقت: {e}")
+        finally:
+            del pending_users[chat_id][user_id]
+
+async def dev_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج أوامر المطورين"""
+    user_id = update.effective_user.id
+    if user_id not in DEVELOPER_IDS:
+        await update.message.reply_text("عذراً، هذه الأوامر مخصصة للمطورين فقط.")
+        return
+    
+    text = update.message.text.strip()
+    args = text.split()
+    command = args[0].lower()
+    
+    if command == "/stats":
+        stats = await get_bot_stats()
+        captcha_stats = await get_stats()
+        message = (
+            f"📊 **إحصائيات البوت** 📊\n\n"
+            f"👥 **إجمالي المجموعات:** {stats["total_chats"]}\n"
+            f"👤 **إجمالي المستخدمين:** {stats["total_users"]}\n\n"
+            f"**إحصائيات الكابتشا:**\n"
+            f"✅ **الناجحة:** {captcha_stats["success"]}\n"
+            f"❌ **المطرودون:** {captcha_stats["kicked"]}\n"
+            f"⏰ **انتهى الوقت:** {captcha_stats["timeout"]}"
+        )
+        await update.message.reply_text(message, parse_mode="Markdown")
+
+    elif command == "/broadcast" and len(args) > 1:
+        message_to_broadcast = " ".join(args[1:])
+        await broadcast_message(update, context, message_to_broadcast)
+
+async def broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
+    """إرسال رسالة إذاعية إلى جميع المجموعات"""
+    chats = await get_all_chats()
+    success_count = 0
+    for chat_id in chats:
+        try:
+            await context.bot.send_message(chat_id, message)
+            success_count += 1
+            await asyncio.sleep(0.1) # لتجنب تجاوز حدود الإرسال
+        except Exception as e:
+            logger.error(f"خطأ في إرسال رسالة إذاعية إلى {chat_id}: {e}")
+    
+    await update.message.reply_text(f"✅ تم إرسال الرسالة الإذاعية بنجاح إلى {success_count} من {len(chats)} مجموعة.")
+
+async def admin_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالج أوامر المشرفين"""
+    user_id = update.effective_user.id
+    if not await is_activating_admin(user_id) and user_id not in DEVELOPER_IDS:
+        await update.message.reply_text("عذراً، هذه الأوامر مخصصة للمشرفين الذين قاموا بتفعيل البوت فقط.")
+        return
+
+    text = update.message.text.strip()
+    args = text.split()
+    command = args[0].lower()
+
+    if command == "/broadcast_users" and len(args) > 1:
+        message_to_broadcast = " ".join(args[1:])
+        await broadcast_to_users(update, context, message_to_broadcast)
+
+async def broadcast_to_users(update: Update, context: ContextTypes.DEFAULT_TYPE, message: str):
+    """إرسال رسالة إذاعية إلى جميع المستخدمين"""
+    targets = []
+    if update.effective_user.id in DEVELOPER_IDS:
+        targets = await get_all_users()
+    else:
+        # المشرفون يمكنهم فقط مراسلة المستخدمين في مجموعاتهم
+        # (هذه الميزة تحتاج إلى تنفيذ إضافي لتتبع المستخدمين لكل مجموعة)
+        await update.message.reply_text("هذه الميزة متاحة حاليًا للمطورين فقط.")
+        return
+
+    success_count = 0
+    for target_id in targets:
+        try:
+            await context.bot.send_message(target_id, message)
+            success_count += 1
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            logger.error(f"خطأ في إرسال رسالة إذاعية إلى {target_id}: {e}")
+    
+    await update.message.reply_text(f"✅ تم إرسال الرسالة الإذاعية بنجاح إلى {success_count} من {len(targets)} هدف.")
+
+
+@app.route("/health")
+def health_check():
+    return "OK", 200
+
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+async def webhook_handler():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    return "", 200
+
+async def setup_bot():
+    global application
+    init_mongodb()
+
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    # معالجات الأوامر
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(MessageHandler(filters.Regex(re.compile(r"^تفعيل$", re.IGNORECASE)), enable_protection))
+    application.add_handler(MessageHandler(filters.Regex(re.compile(r"^تعطيل$", re.IGNORECASE)), disable_protection))
+    application.add_handler(CommandHandler("stats", dev_command_handler))
+    application.add_handler(CommandHandler("broadcast", dev_command_handler))
+    application.add_handler(CommandHandler("broadcast_users", admin_command_handler))
+
+    # معالج الأعضاء الجدد
+    application.add_handler(ChatMemberHandler(new_member_handler, ChatMemberHandler.CHAT_MEMBER))
+
+    # معالج ردود الكابتشا
+    application.add_handler(CallbackQueryHandler(captcha_callback_handler, pattern=r"^captcha_"))
+
+    # معالج أزرار القوائم
+    application.add_handler(CallbackQueryHandler(start_command, pattern=r"^(dev_commands_menu|admin_commands_menu)$"))
+
+    # Set the webhook
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        await application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
+        logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
+    else:
+        logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
+
+    # Start the application in webhook mode (it will not poll)
+    # We don\\'t call application.start() here because Flask will handle the webhook reception
+    # and pass updates to application.process_update()
+
+if __name__ == "__main__":
+    # Run the bot setup in an asyncio event loop
+    asyncio.run(setup_bot())
+
+    # Get the port from environment variable, default to 10000 for Render health checks
+    port = int(os.environ.get("PORT", "10000"))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host="0.0.0.0", port=port)
+
 
