@@ -1,17 +1,14 @@
 #!/bin/bash
 
-echo "🚀 Starting Telegram Protection Bot Server..."
-
-# Install Node.js dependencies
-echo "📦 Installing Node.js dependencies..."
-npm install
+echo "🚀 Starting Telegram Protection Bot..."
 
 # Install Python dependencies
 echo "🐍 Upgrading pip and installing Python dependencies..."
 pip3 install --upgrade pip
 pip3 install -r requirements.txt --no-cache-dir
 
-# Start the server
-echo "🌟 Starting Express server..."
-npm start
+# Start the Python bot
+echo "🌟 Starting Python bot..."
+python3 main.py
+
 

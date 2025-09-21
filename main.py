@@ -456,37 +456,53 @@ async def captcha_callback_handler(update: Update, context: ContextTypes.DEFAULT
         
         if user_data["wrong_attempts"] >= 2:
             logger.info(f"محاولة طرد المستخدم {user_id} من {chat_id} بعد {user_data["wrong_attempts"]} محاولات خاطئة.")
-            await context.bot.send_message(chat_id, f"❌ إجابات خاطئة متكررة. سيتم طردك. @{query.from_user.username or query.from_user.first_name}")
-            try:
-                await context.bot.unban_chat_member(chat_id, user_id) # Kicking is unbanning a restricted user who is currently restricted
-                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-                await log_captcha_event(user_id, chat_id, "kicked")
-            except Exception as e:
-                logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد الإجابات الخاطئة المتكررة: {e}")
+            await context.bot.send_message(chat_id, f"❌ {query.from_user.mention_html()} لقد فشلت في حل الكابتشا بعد عدة محاولات. سيتم طردك.", parse_mode="HTML")
+            await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+            await kick_user(context, chat_id, user_id)
+            await log_captcha_event(user_id, chat_id, "kicked")
+            del pending_users[chat_id][user_id]
+        else:
+            # Regenerate options for the same question
+            question, correct_answer = CaptchaGenerator.generate_math_captcha()
+            options = CaptchaGenerator.generate_options(correct_answer)
+            keyboard = []
+            for i, option in enumerate(options):
+                keyboard.append([InlineKeyboardButton(str(option), callback_data=f"captcha_{user_id}_{option}")])
+            reply_markup = InlineKeyboardMarkup(keyboard)
             
-            task_key = f"{chat_id}_{user_id}"
-            if task_key in kick_tasks:
-                kick_tasks[task_key].cancel()
-                del kick_tasks[task_key]
-            
-            if chat_id in pending_users and user_id in pending_users[chat_id]:
-                del pending_users[chat_id][user_id]
+            # Update the message with new options
+            await query.edit_message_text(
+                text=f"مرحباً {query.from_user.mention_html()}!\n\n"
+                     f"لضمان أنك لست بوت، يرجى حل هذا السؤال:\n\n"
+                     f"❓ {question}\n\n"
+                     f"⏰ لديك 30 دقيقة لحل السؤال، وإلا سيتم طردهم تلقائياً.",
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+            # Update the correct answer in pending_users
+            pending_users[chat_id][user_id]["correct_answer"] = correct_answer
 
 async def schedule_kick(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, message_id: int):
-    """جدولة طرد المستخدم بعد فترة زمنية"""
-    await asyncio.sleep(1800)  # 30 دقيقة
+    """جدولة طرد المستخدم إذا لم يحل الكابتشا في الوقت المحدد"""
+    await asyncio.sleep(30 * 60)  # 30 دقيقة
     
     if chat_id in pending_users and user_id in pending_users[chat_id]:
-        logger.info(f"طرد المستخدم {user_id} من {chat_id} بسبب انتهاء الوقت.")
         try:
-            await context.bot.unban_chat_member(chat_id, user_id)
+            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! {pending_users[chat_id][user_id][\'username\']} لم يحل الكابتشا في الوقت المحدد. سيتم طرده.")
             await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await context.bot.send_message(chat_id, f"⏰ انتهى الوقت! تم طرد المستخدم @{pending_users[chat_id][user_id]["username"]}.")
+            await kick_user(context, chat_id, user_id)
             await log_captcha_event(user_id, chat_id, "timeout")
+            del pending_users[chat_id][user_id]
         except Exception as e:
             logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id} بعد انتهاء الوقت: {e}")
-        finally:
-            del pending_users[chat_id][user_id]
+
+async def kick_user(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int):
+    """طرد المستخدم من المجموعة"""
+    try:
+        await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+        logger.info(f"تم طرد المستخدم {user_id} من المجموعة {chat_id}.")
+    except Exception as e:
+        logger.error(f"خطأ في طرد المستخدم {user_id} من {chat_id}: {e}")
 
 async def dev_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالج أوامر المطورين"""
@@ -494,11 +510,11 @@ async def dev_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if user_id not in DEVELOPER_IDS:
         await update.message.reply_text("عذراً، هذه الأوامر مخصصة للمطورين فقط.")
         return
-    
+
     text = update.message.text.strip()
     args = text.split()
     command = args[0].lower()
-    
+
     if command == "/stats":
         stats = await get_bot_stats()
         captcha_stats = await get_stats()
@@ -611,7 +627,7 @@ async def setup_bot():
         await application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}")
         logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
 
-    # We don't call application.start() or application.run_webhook() here.
+    # We don\'t call application.start() or application.run_webhook() here.
     # The Flask app will handle the incoming webhook requests and pass them to application.process_update().
     # The main thread will be blocked by app.run() if webhook_url is set, which is the desired behavior for Render.
     # a webhook setup on platforms like Render.com.
@@ -620,7 +636,7 @@ async def setup_bot():
         logger.warning("WEBHOOK_URL not set. Webhook will not be configured.")
 
     # Start the application in webhook mode (it will not poll)
-    # We don't call application.start() here because Flask will handle the webhook reception
+    # We don\'t call application.start() here because Flask will handle the webhook reception
     # and pass updates to application.process_update()
 
 if __name__ == "__main__":
@@ -628,29 +644,29 @@ if __name__ == "__main__":
     asyncio.run(setup_bot())
 
     # The Flask server is already started in a separate thread by start_keep_alive_server() called in setup_bot()
-    # We need to keep the main thread alive for the bot's webhook to function.
+    # We need to keep the main thread alive for the bot\'s webhook to function.
     # The webhook handler in Flask will process updates.
     # For Render, the Flask app needs to be running in the main process to handle requests.
     # The previous logic was attempting to run Flask directly or polling, which is incorrect for a webhook setup with a separate Flask server.
     # The Flask server for the webhook needs to be started in the main thread to handle incoming requests from Telegram.
-    # The bot's `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
+    # The bot\'s `application.run_webhook()` or `application.run_polling()` should not be called here if Flask is handling the webhook.
     # Instead, the Flask app should be run directly in the main thread to serve the webhook.
 
     webhook_url = os.environ.get("WEBHOOK_URL")
-    if webhook_url        # If webhook is configured, set the webhook and then run the Flask app directly.
+    if webhook_url:        # If webhook is configured, set the webhook and then run the Flask app directly.
         # Render will manage the process, so we just need to ensure the Flask app is listening.
         port = int(os.environ.get("PORT", 8000))
         # Set the webhook first
-        await application.bot.set_webhook(url=webhook_url)
-        logger.info(f"Webhook set to {webhook_url}")
+        asyncio.run(application.bot.set_webhook(url=f"{webhook_url}/{BOT_TOKEN}"))
+        logger.info(f"Webhook set to {webhook_url}/{BOT_TOKEN}")
         # Then run the Flask app to listen for updates
         app.run(host="0.0.0.0", port=port, debug=False)
-ok on port {port}")
-        app.run(host="0.0.0.0", port=port)
     else:
         # If no webhook, run polling (e.g., for local development or other deployment types)
         logger.info("WEBHOOK_URL not set. Starting bot polling...")
         application.run_polling(drop_pending_updates=True)
+
+
 
 
 
